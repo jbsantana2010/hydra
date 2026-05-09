@@ -45,6 +45,24 @@ Append-only summary of what was verified, with timestamps. One entry per sprint 
 | Launch dashboard renders "Live without distribution" | PASS |
 
 
+## Sprint 1.5 — 2026-05-09
+
+| Check | Result |
+|---|---|
+| Sprint 1.5 imports + reverse_providers param | PENDING — run verify_sprint15.sh |
+| /health 200 | PENDING |
+| Kill switch blocks all 5 generation routes | PENDING |
+| budget=0 blocks all 5 generation routes | PENDING |
+| Prerequisite gates (content/listing/qa/distribution without prior step) | PENDING |
+| outline returns blocked/failed without API keys (no crash) | PENDING |
+| product_edit shows all 5 generation buttons | PENDING |
+| product_edit shows all 4 storefronts (Gumroad · Etsy · Sellfy · Payhip) | PENDING |
+| Existing /products /revenue /launch /settings routes | PENDING |
+
+_Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
+
+---
+
 ## Sprint 1.4 — 2026-05-09
 
 | Check | Result |

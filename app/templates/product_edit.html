@@ -50,6 +50,96 @@
     <span class="muted">Writes one Markdown file per artifact under exports/product_{{ product.id }}/</span>
   </div>
 
+  {# ── Sprint 1.5: Agentic Generation Pipeline (Gumroad · Etsy · Sellfy · Payhip) ── #}
+  <h3>Generate</h3>
+  <p class="muted" style="margin-bottom:12px;">Each step saves an artifact. Review before advancing. All calls are budget-capped and kill-switch gated.</p>
+  <div class="stack">
+
+    {% set outline_done = generation_status.outline %}
+    <section class="panel">
+      <h3>1 — Outline</h3>
+      {% if outline_done %}
+        <p class="muted">✓ Generated {{ outline_done.created_at }} · <em>{{ outline_done.title }}</em></p>
+      {% else %}
+        <p class="muted">Produces a multi-marketplace product outline from the opportunity signal.</p>
+      {% endif %}
+      <form method="post" action="/products/{{ product.id }}/generate/outline" style="margin-top:8px;">
+        <button type="submit" {% if outline_done %}class="secondary"{% endif %}>
+          {{ "Regenerate Outline" if outline_done else "Generate Outline" }}
+        </button>
+      </form>
+    </section>
+
+    {% set content_done = generation_status.product_content %}
+    <section class="panel" {% if not outline_done %}style="opacity:0.5"{% endif %}>
+      <h3>2 — Product Content</h3>
+      {% if not outline_done %}
+        <p class="muted">⚠ Complete step 1 first.</p>
+      {% elif content_done %}
+        <p class="muted">✓ Generated {{ content_done.created_at }} · <em>{{ content_done.title }}</em></p>
+      {% else %}
+        <p class="muted">Writes complete buyer-ready content for every section in the outline.</p>
+      {% endif %}
+      <form method="post" action="/products/{{ product.id }}/generate/content" style="margin-top:8px;">
+        <button type="submit" {% if not outline_done %}disabled{% elif content_done %}class="secondary"{% endif %}>
+          {{ "Regenerate Content" if content_done else "Generate Content" }}
+        </button>
+      </form>
+    </section>
+
+    {% set listing_done = generation_status.listing_copy %}
+    <section class="panel" {% if not content_done %}style="opacity:0.5"{% endif %}>
+      <h3>3 — Listing Copy (Gumroad · Etsy · Sellfy · Payhip)</h3>
+      {% if not content_done %}
+        <p class="muted">⚠ Complete step 2 first.</p>
+      {% elif listing_done %}
+        <p class="muted">✓ Generated {{ listing_done.created_at }} · <em>{{ listing_done.title }}</em></p>
+      {% else %}
+        <p class="muted">Writes optimized listing copy for all four storefronts simultaneously.</p>
+      {% endif %}
+      <form method="post" action="/products/{{ product.id }}/generate/listing" style="margin-top:8px;">
+        <button type="submit" {% if not content_done %}disabled{% elif listing_done %}class="secondary"{% endif %}>
+          {{ "Regenerate Listing Copy" if listing_done else "Generate Listing Copy" }}
+        </button>
+      </form>
+    </section>
+
+    {% set qa_done = generation_status.qa_review %}
+    <section class="panel" {% if not content_done %}style="opacity:0.5"{% endif %}>
+      <h3>4 — QA Review</h3>
+      {% if not content_done %}
+        <p class="muted">⚠ Complete step 2 first.</p>
+      {% elif qa_done %}
+        <p class="muted">✓ Generated {{ qa_done.created_at }} · <em>{{ qa_done.title }}</em></p>
+      {% else %}
+        <p class="muted">Adversarial review using the alternate model family as critic. Checks content, listing copy, and Etsy tags.</p>
+      {% endif %}
+      <form method="post" action="/products/{{ product.id }}/generate/qa" style="margin-top:8px;">
+        <button type="submit" {% if not content_done %}disabled{% elif qa_done %}class="secondary"{% endif %}>
+          {{ "Re-run QA" if qa_done else "Run QA Review" }}
+        </button>
+      </form>
+    </section>
+
+    {% set dist_done = generation_status.distribution_post %}
+    <section class="panel" {% if not listing_done %}style="opacity:0.5"{% endif %}>
+      <h3>5 — Distribution Posts</h3>
+      {% if not listing_done %}
+        <p class="muted">⚠ Complete step 3 first.</p>
+      {% elif dist_done %}
+        <p class="muted">✓ Generated {{ dist_done.created_at }} · <em>{{ dist_done.title }}</em></p>
+      {% else %}
+        <p class="muted">Generates platform-native posts for Reddit, X, HN, and IndieHackers. Operator posts manually.</p>
+      {% endif %}
+      <form method="post" action="/products/{{ product.id }}/generate/distribution" style="margin-top:8px;">
+        <button type="submit" {% if not listing_done %}disabled{% elif dist_done %}class="secondary"{% endif %}>
+          {{ "Regenerate Posts" if dist_done else "Generate Distribution Posts" }}
+        </button>
+      </form>
+    </section>
+
+  </div>
+
   <h3>Files</h3>
   {% if files %}
     <table>

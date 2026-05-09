@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 import secrets
@@ -199,6 +200,11 @@ def edit_product(request: Request, product_id: int):
             .order_by(desc(ProductFile.created_at))
         ).all()
         url_check = check_gumroad_url(product)
+        generation_steps = ("outline", "product_content", "listing_copy", "qa_review", "distribution_post")
+        generation_status = {
+            step: _latest_artifact(session, product_id, step)
+            for step in generation_steps
+        }
         return templates.TemplateResponse(
             "product_edit.html",
             {
@@ -208,6 +214,7 @@ def edit_product(request: Request, product_id: int):
                 "files": files,
                 "statuses": PRODUCT_STATUSES,
                 "url_check": url_check,
+                "generation_status": generation_status,
             },
         )
 
@@ -1041,4 +1048,368 @@ def mark_artifact_published(
         artifact.published_url = url or None
         artifact.published_at = datetime.utcnow() if url else None
         artifact.channel_tag = (channel_tag or "").strip().lower() or None
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+# ---------------------------------------------------------------------------
+# Sprint 1.5 — In-process agentic generation (multi-marketplace aware)
+# ---------------------------------------------------------------------------
+# Philosophy: all generation flows through the guarded app/llm.py client.
+# Each route saves one ProductArtifact. Human reviews and advances each step.
+# No publishing, no auto-spending beyond budget-capped LLM calls.
+# Target marketplaces from day one: Gumroad, Etsy, Sellfy, Payhip.
+# ---------------------------------------------------------------------------
+
+_STEP_REQUIRES: dict[str, str | None] = {
+    "outline":           None,
+    "product_content":   "outline",
+    "listing_copy":      "product_content",
+    "qa_review":         "product_content",
+    "distribution_post": "listing_copy",
+}
+
+
+def _latest_artifact(session, product_id: int, artifact_type: str):
+    """Return the most recent artifact of the given type, or None."""
+    return session.scalar(
+        select(ProductArtifact)
+        .where(ProductArtifact.product_id == product_id)
+        .where(ProductArtifact.artifact_type == artifact_type)
+        .order_by(desc(ProductArtifact.created_at))
+    )
+
+
+def _generation_error(action: str, status: str, message: str) -> JSONResponse:
+    return JSONResponse({"status": status, "action": action, "message": message})
+
+
+def _artifact_context(session, product_id: int, artifact_type: str) -> dict:
+    """Parse latest artifact JSON of given type; return {} on miss or decode error."""
+    art = _latest_artifact(session, product_id, artifact_type)
+    if not art:
+        return {}
+    try:
+        return json.loads(art.content)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+@app.post("/products/{product_id}/generate/outline")
+def generate_outline(product_id: int):
+    """Step 1: generate a multi-marketplace product outline from the opportunity signal."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        candidate = session.get(OpportunityCandidate, product.opportunity_id) if product.opportunity_id else None
+
+        schema = {
+            "product_title": "string",
+            "tagline": "string",
+            "buyer_persona": "string",
+            "core_pain_solved": "string",
+            "deliverable_sections": [
+                {"title": "string", "purpose": "string", "estimated_length": "string"}
+            ],
+            "etsy_keyword_angle": "string",
+            "gumroad_hook": "string",
+            "risk_notes": "none",
+        }
+        system_prompt = (
+            "You are HYDRA's Product Architect. Produce a commercially-focused digital download outline "
+            "targeting Gumroad, Etsy, Sellfy, and Payhip buyers simultaneously. Return strict JSON only. "
+            "The product must be a standalone download — no upsells or sign-up walls. "
+            "Do not recommend medical, legal, financial, or political advice without flagging risk_notes. "
+            "Do not imitate or copy copyrighted properties."
+        )
+        evidence = (candidate.evidence if candidate else None) or product.notes or "(none)"
+        user_prompt = (
+            f"Topic: {product.title}\n"
+            f"Vertical: {candidate.vertical if candidate else 'general'}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Price target: ${product.price}\n"
+            f"Target marketplaces: Gumroad, Etsy, Sellfy, Payhip\n"
+            f"Signal evidence: {evidence}\n\n"
+            "deliverable_sections: 4-8 items. "
+            "etsy_keyword_angle: one sentence on the SEO keyword angle for Etsy title and tags. "
+            "gumroad_hook: one sentence opening hook for the Gumroad/Sellfy description. "
+            "risk_notes: 'none' or a description of any IP, legal, or platform-policy risk."
+        )
+        try:
+            data = call_llm_json(session, "outline", system_prompt, user_prompt, schema, max_cost_usd=0.003)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="outline",
+                title=f"Outline: {data.get('product_title', product.title)}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:outline",
+            ))
+        except (LlmBlocked, LlmFailed) as exc:
+            return _generation_error("outline", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.post("/products/{product_id}/generate/content")
+def generate_content(product_id: int):
+    """Step 2: write complete buyer-ready content for every section in the outline."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "outline"):
+            return _generation_error("content", "missing_prereq", "Generate and review an Outline first.")
+
+        outline = _artifact_context(session, product_id, "outline")
+        sections = outline.get("deliverable_sections") or []
+        sections_text = "\n".join(
+            f"- {s.get('title', 'Section')}: {s.get('purpose', '')} ({s.get('estimated_length', '')})"
+            for s in sections
+        ) or "(no sections in outline — regenerate outline)"
+
+        schema = {
+            "sections": [{"title": "string", "content": "string"}],
+            "total_word_count_estimate": 0,
+        }
+        system_prompt = (
+            "You are HYDRA's Product Writer. Write complete, buyer-ready content for every section listed. "
+            "This is a finished product — not a draft, skeleton, or template with blanks. "
+            "Every section must be fully written. Never write placeholder text like [INSERT HERE]. "
+            "Do not include medical, legal, financial, or political advice. Return strict JSON only."
+        )
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Buyer persona: {outline.get('buyer_persona', 'buyer')}\n"
+            f"Core pain solved: {outline.get('core_pain_solved', '')}\n"
+            f"Target marketplaces: Gumroad, Etsy, Sellfy, Payhip\n\n"
+            f"Sections to write:\n{sections_text}\n\n"
+            "Return one JSON object per section with its full written content. Aim for publication quality."
+        )
+        try:
+            data = call_llm_json(session, "product_content", system_prompt, user_prompt, schema, max_cost_usd=0.012)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="product_content",
+                title=f"Content: {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:content",
+            ))
+        except (LlmBlocked, LlmFailed) as exc:
+            return _generation_error("content", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.post("/products/{product_id}/generate/listing")
+def generate_listing(product_id: int):
+    """Step 3: generate platform-optimized listing copy for all four storefronts."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "product_content"):
+            return _generation_error("listing", "missing_prereq", "Generate Content first.")
+
+        outline = _artifact_context(session, product_id, "outline")
+        content_data = _artifact_context(session, product_id, "product_content")
+        sections = content_data.get("sections") or []
+        content_preview = " ".join(
+            s.get("content", "")[:400] for s in sections[:3]
+        )[:1000]
+
+        schema = {
+            "gumroad": {"title": "string", "description": "string", "tags": ["string"]},
+            "etsy": {
+                "title": "string",
+                "description": "string",
+                "tags": ["string"] * 13,
+                "category_hint": "string",
+            },
+            "sellfy": {"title": "string", "description": "string"},
+            "payhip": {"title": "string", "description": "string"},
+            "universal": {"short_description": "string", "tagline": "string"},
+        }
+        system_prompt = (
+            "You are HYDRA's Marketplace Copywriter specializing in digital downloads sold across multiple storefronts. "
+            "Rules by platform:\n"
+            "Gumroad: title 60-80 chars, description 300-600 words, conversational and benefit-led, tags optional.\n"
+            "Etsy: title MUST be under 140 chars starting with the primary search keyword buyers type; "
+            "exactly 13 tags each under 20 chars, comma-separated, covering every keyword angle; "
+            "description 400-600 words, keyword-rich, explains what buyer gets, format, and primary use cases.\n"
+            "Sellfy: title under 80 chars, description 200-350 words, punchy and conversion-focused.\n"
+            "Payhip: title under 80 chars, description 200-300 words, friendly and benefit-first.\n"
+            "universal.short_description: under 160 chars, usable as a tweet or meta description.\n"
+            "Do not fabricate reviews, statistics, or credentials. No medical/legal/financial advice. "
+            "Return strict JSON only."
+        )
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Price: ${product.price}\n"
+            f"Buyer persona: {outline.get('buyer_persona', '')}\n"
+            f"Core pain solved: {outline.get('core_pain_solved', '')}\n"
+            f"Tagline: {outline.get('tagline', '')}\n"
+            f"Etsy keyword angle: {outline.get('etsy_keyword_angle', '')}\n"
+            f"Gumroad hook: {outline.get('gumroad_hook', '')}\n"
+            f"Content preview: {content_preview}\n\n"
+            "Generate listing copy for all four storefronts plus universal fields."
+        )
+        try:
+            data = call_llm_json(session, "listing_copy", system_prompt, user_prompt, schema, max_cost_usd=0.006)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="listing_copy",
+                title=f"Listing Copy (Gumroad + Etsy + Sellfy + Payhip): {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:listing",
+            ))
+        except (LlmBlocked, LlmFailed) as exc:
+            return _generation_error("listing", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.post("/products/{product_id}/generate/qa")
+def generate_qa(product_id: int):
+    """Step 4: adversarial QA review using the alternate provider as critic."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "product_content"):
+            return _generation_error("qa", "missing_prereq", "Generate Content first.")
+
+        content_data = _artifact_context(session, product_id, "product_content")
+        listing_data = _artifact_context(session, product_id, "listing_copy")
+        sections = content_data.get("sections") or []
+        content_preview = "\n\n".join(
+            f"## {s.get('title', '')}\n{s.get('content', '')[:700]}"
+            for s in sections[:4]
+        )[:2500]
+        gumroad_desc = (listing_data.get("gumroad") or {}).get("description", "")[:800]
+        etsy_title = (listing_data.get("etsy") or {}).get("title", "")
+        etsy_tags = (listing_data.get("etsy") or {}).get("tags", [])
+
+        schema = {
+            "score": 0,
+            "publishable": True,
+            "blocking_issues": ["string"],
+            "non_blocking_suggestions": ["string"],
+            "slop_phrases_found": ["string"],
+            "risk_flags": ["string"],
+            "etsy_tag_issues": ["string"],
+        }
+        system_prompt = (
+            "You are an adversarial quality reviewer for a digital download marketplace seller. "
+            "Buyers paid real money. Be skeptical and specific. Never be generous out of politeness. "
+            "Score: 90+ = publish-ready; 70-89 = publishable with minor edits; below 70 = revise first. "
+            "publishable: true only if score >= 70 AND no blocking issues. Return strict JSON only."
+        )
+        etsy_tag_text = ", ".join(etsy_tags) if etsy_tags else "(no tags generated)"
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Price: ${product.price}\n\n"
+            f"Content (first 4 sections):\n{content_preview}\n\n"
+            f"Gumroad description:\n{gumroad_desc}\n\n"
+            f"Etsy title: {etsy_title}\n"
+            f"Etsy tags: {etsy_tag_text}\n\n"
+            "Evaluate: (1) title vs content match, (2) hallucinated facts or tool names, "
+            "(3) incomplete/skeleton sections, (4) AI slop phrases, "
+            "(5) IP/trademark/regulated-advice risks, (6) Gumroad listing honestly represents the product, "
+            "(7) Etsy title starts with primary keyword and is under 140 chars, "
+            "(8) Etsy tags: exactly 13, each under 20 chars, no duplicates. "
+            "List every blocking issue separately in blocking_issues."
+        )
+        try:
+            # QA uses reverse_providers so it critiques with the alternate model family
+            data = call_llm_json(
+                session, "qa_review", system_prompt, user_prompt, schema,
+                max_cost_usd=0.006, reverse_providers=True,
+            )
+            score = data.get("score", 0)
+            publishable = data.get("publishable", False)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="qa_review",
+                title=f"QA Review (score={score}, publishable={publishable}): {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:qa",
+            ))
+        except (LlmBlocked, LlmFailed) as exc:
+            return _generation_error("qa", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.post("/products/{product_id}/generate/distribution")
+def generate_distribution(product_id: int):
+    """Step 5: generate platform-native launch posts across Reddit, X, HN, IndieHackers."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "listing_copy"):
+            return _generation_error("distribution", "missing_prereq", "Generate Listing Copy first.")
+
+        outline = _artifact_context(session, product_id, "outline")
+        listing_data = _artifact_context(session, product_id, "listing_copy")
+        universal = listing_data.get("universal") or {}
+        gumroad_url = (product.gumroad_url or "").strip() or "TBD — add Gumroad URL to product before posting"
+
+        schema = {
+            "reddit": {
+                "suggested_subreddits": ["string"],
+                "title": "string",
+                "body": "string",
+            },
+            "twitter_x": {
+                "thread_hook": "string",
+                "thread_body": "string",
+            },
+            "hn_show_hn": {
+                "title": "string",
+                "comment": "string",
+            },
+            "indiehackers": {
+                "title": "string",
+                "body": "string",
+            },
+            "operator_notes": "string",
+        }
+        system_prompt = (
+            "You are HYDRA's Distribution Writer. Write launch posts for digital products that feel "
+            "completely native to each platform. Lead with value, never with the product itself. "
+            "You are a real person sharing something genuinely useful — not a marketer.\n"
+            "Reddit: add real value first; mention the product softly at the end; link as postscript. "
+            "Suggest 2-3 specific subreddits where this exact audience lives.\n"
+            "Twitter/X: thread_hook under 280 chars (strong hook that stands alone); "
+            "thread_body 2-4 follow-up tweets separated by a blank line.\n"
+            "HN Show HN: title as 'Show HN: ...' with technical framing; honest, no hype; "
+            "comment provides context and link.\n"
+            "IndieHackers: builder story angle — what you noticed, what you built, what you learned; "
+            "community-first, link at the end.\n"
+            "operator_notes: one sentence of platform-specific advice the human should remember before posting.\n"
+            "NEVER write fake social proof, engagement-bait, or fabricated statistics. "
+            "Return strict JSON only."
+        )
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Tagline: {universal.get('short_description', outline.get('tagline', ''))}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Buyer persona: {outline.get('buyer_persona', '')}\n"
+            f"Core pain solved: {outline.get('core_pain_solved', '')}\n"
+            f"Gumroad URL: {gumroad_url}\n\n"
+            "Generate platform-specific launch posts. The operator will review and post manually. "
+            "No post should be copy-pasted across platforms — each must be rewritten for its audience."
+        )
+        try:
+            data = call_llm_json(
+                session, "distribution_post", system_prompt, user_prompt, schema, max_cost_usd=0.006
+            )
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="distribution_post",
+                title=f"Distribution Posts (Reddit / X / HN / IH): {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:distribution",
+            ))
+        except (LlmBlocked, LlmFailed) as exc:
+            return _generation_error("distribution", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
     return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)

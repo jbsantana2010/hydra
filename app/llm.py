@@ -57,6 +57,7 @@ def call_llm_json(
     schema_hint: dict,
     max_cost_usd: float = 0.20,
     timeout_seconds: int = 30,
+    reverse_providers: bool = False,
 ) -> dict:
     """Call the configured LLM providers and return parsed JSON only.
 
@@ -83,7 +84,7 @@ def call_llm_json(
                 f"Daily LLM budget exceeded: spend ${today_spend} + estimate ${estimated_cost} > cap ${daily_budget}"
             )
 
-        providers = _providers()
+        providers = _providers(reverse=reverse_providers)
         if not providers:
             raise LlmBlocked("No LLM API key configured")
 
@@ -142,7 +143,7 @@ def call_llm_json(
         raise
 
 
-def _providers() -> list[Provider]:
+def _providers(reverse: bool = False) -> list[Provider]:
     primary = os.getenv("HYDRA_LLM_PRIMARY", "anthropic").lower()
     fallback = os.getenv("HYDRA_LLM_FALLBACK", "openai").lower()
     order = []
@@ -156,7 +157,7 @@ def _providers() -> list[Provider]:
             providers.append(Provider("anthropic", ANTHROPIC_MODEL, os.environ["ANTHROPIC_API_KEY"]))
         if name == "openai" and os.getenv("OPENAI_API_KEY"):
             providers.append(Provider("openai", OPENAI_MODEL, os.environ["OPENAI_API_KEY"]))
-    return providers
+    return providers[::-1] if reverse else providers
 
 
 def _call_provider(

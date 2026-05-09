@@ -11,6 +11,9 @@ Severities: `low` / `medium` / `high`.
 
 ---
 
+- 2026-05-09 [sprint 1.5] **low** — Generation routes return JSON on error but redirect (303) on success. Callers that follow redirects via curl -L will land on the product edit HTML, not JSON. Verification script tests guard paths (JSON) and success via DB row count, not HTTP body.
+- 2026-05-09 [sprint 1.5] **low** — QA reverse_providers uses the alternate model only if both API keys are configured. With one key, QA and generation use the same model. No crash; noted in operator UX as "same-model QA".
+- 2026-05-09 [sprint 1.5] **low** — Content generation max_cost_usd=$0.012; a very long outline (8 sections × long content) could approach this ceiling for Anthropic Haiku. Mitigation: ceiling is pre-call estimated and blocked before any spend occurs.
 - 2026-05-09 [sprint 1.4] **low** — LLM token and cost accounting uses conservative estimates unless provider usage metadata is returned. `app/llm.py`. Mitigation: pre-call estimates are rounded up and capped before spend.
 - 2026-05-09 [sprint 1.4] **low** — Verification without API keys proves fallback/guard behavior only; a real provider smoke is conditional on `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. `scripts/verify_sprint14.sh`. Mitigation: script automatically runs a real JSON call when keys are present.
 - 2026-05-08 [sprint 1.2] **medium** — `init_db()` runs `create_all()`; column changes will need manual migration or destructive reset. `app/db.py:init_db`. Plan: Sprint 2.0 baselines Alembic.
