@@ -22,3 +22,23 @@ scripts/verify_url_warnings.sh 34
 # Compile-only sanity
 python3 -m py_compile app/main.py app/db.py app/signal_engine.py app/ruflo_bridge.py
 ```
+
+
+## Sprint 1.3
+
+```bash
+# Build / lifecycle
+docker compose up -d --build
+docker compose logs --tail 60 hydra-console
+
+# Read-only inspection
+scripts/state_inspect.sh
+./scripts/preflight_check.sh
+./scripts/status_snapshot.sh
+
+# Verification
+scripts/verify_sprint13.sh
+
+# Compile
+python3 -m py_compile app/main.py app/db.py app/signal_engine.py app/ruflo_bridge.py
+```

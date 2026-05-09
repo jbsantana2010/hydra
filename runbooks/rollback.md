@@ -27,3 +27,21 @@ One section per sprint that introduced an irreversible or risky change. Each sec
   UPDATE system_flags SET value = '3'     WHERE key = 'daily_budget_usd';
   ```
 - **Volume mount for `./exports`.** Removing the volume in `docker-compose.yml` does not delete files on the host; it only stops the container from seeing them.
+
+
+### Sprint 1.3
+
+- **Code rollback (single command):**
+  ```bash
+  git checkout HEAD -- app/main.py app/db.py app/templates/product_edit.html app/templates/revenue.html app/templates/launch.html
+  docker compose up -d --build
+  ```
+- **Schema rollback (only if mandatory; columns are nullable and harmless if left in place):**
+  ```sql
+  ALTER TABLE revenue_events    DROP COLUMN IF EXISTS source_attribution;
+  ALTER TABLE revenue_events    DROP COLUMN IF EXISTS channel_tag;
+  ALTER TABLE product_artifacts DROP COLUMN IF EXISTS published_url;
+  ALTER TABLE product_artifacts DROP COLUMN IF EXISTS published_at;
+  ALTER TABLE product_artifacts DROP COLUMN IF EXISTS channel_tag;
+  ```
+- **Auto-registered `product_files` rows for product 35** are deletable; the actual exported Markdown remains in `./exports/product_35/`.

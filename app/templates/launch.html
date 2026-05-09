@@ -42,6 +42,10 @@
       <div class="metric">{{ missing_url_count }}</div>
     </section>
     <section class="panel">
+      <div class="muted">Live without distribution</div>
+      <div class="metric">{{ missing_distribution_count }}</div>
+    </section>
+    <section class="panel">
       <div class="muted">Top opportunities</div>
       <div class="metric">{{ top_opportunities|length }}</div>
     </section>
@@ -50,6 +54,50 @@
       <div class="metric">{{ latest_products|length }}</div>
     </section>
   </div>
+
+  {% if channel_rows %}
+    <h3 style="margin-top: 24px;">Revenue by channel</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Channel</th>
+          <th>Events</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in channel_rows %}
+          <tr>
+            <td><strong>{{ row.channel }}</strong></td>
+            <td>{{ row.events }}</td>
+            <td>${{ "%.2f"|format(row.total) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  {% if missing_distribution %}
+    <h3 style="margin-top: 24px;">Live products with no published distribution post</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for product in missing_distribution %}
+          <tr>
+            <td>{{ product.id }}</td>
+            <td><strong>{{ product.title }}</strong></td>
+            <td><a href="/products/{{ product.id }}/edit">Mark distribution published</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
 
   {% if missing_url_products %}
     <h3 style="margin-top: 24px;">Live/listed products missing a Gumroad URL</h3>

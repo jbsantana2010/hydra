@@ -337,6 +337,8 @@ def create_revenue_event(
     currency: str = Form("USD"),
     event_type: str = Form("sale"),
     notes: str = Form(""),
+    source_attribution: str = Form(""),
+    channel_tag: str = Form(""),
 ):
     with session_scope() as session:
         product = session.get(Product, product_id)
@@ -350,6 +352,8 @@ def create_revenue_event(
                 currency=currency or "USD",
                 event_type=event_type or "sale",
                 notes=notes,
+                source_attribution=(source_attribution or "").strip() or None,
+                channel_tag=(channel_tag or "").strip().lower() or None,
             )
         )
     return RedirectResponse(url="/revenue", status_code=303)
@@ -427,10 +431,40 @@ def _suggest_price(production_format: str | None) -> Decimal:
     return Decimal("19")
 
 
+def _format_short_label(production_format: str | None) -> str:
+    """Human-friendly format label for titles. Avoids `'cheat sheet PDF'.title()` ugliness."""
+    if not production_format:
+        return "Pack"
+    f = production_format.lower()
+    pairs = (
+        ("cheat sheet", "Cheat Sheet"),
+        ("prompt pack", "Prompt Pack"),
+        ("notion", "Notion Template"),
+        ("airtable", "Airtable Template"),
+        ("checklist", "Checklist"),
+        ("printable", "Printable Pack"),
+        ("template bundle", "Template Bundle"),
+        ("workflow pdf", "Workflow Guide"),
+        ("workflow guide", "Workflow Guide"),
+        ("script pack", "Script Pack"),
+        ("mini-toolkit", "Toolkit"),
+        ("toolkit", "Toolkit"),
+        ("planner", "Planner"),
+        ("tracker", "Tracker"),
+        ("kit", "Kit"),
+        ("guide", "Guide"),
+        ("pdf", "Guide"),
+    )
+    for needle, label in pairs:
+        if needle in f:
+            return label
+    return "Pack"
+
+
 def build_default_product_fields(candidate: OpportunityCandidate) -> dict:
     """Deterministic prefill so 'Approve' lands the operator on a populated draft."""
-    fmt = candidate.production_format or "digital pack"
-    title = _truncate_title(f"{fmt.title()}: {candidate.topic}")
+    short = _format_short_label(candidate.production_format)
+    title = _truncate_title(f"{candidate.topic} — {short}")
     score = candidate.score if candidate.score is not None else 0
     notes_lines = [
         f"Source: {candidate.source}",
@@ -571,6 +605,7 @@ def export_product_artifacts(product_id: int):
     export_dir = EXPORT_ROOT / f"product_{product_id}"
     export_dir.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
+    pairs: list[tuple[str, str, str]] = []  # (label, path, type)
     for index, row in enumerate(rows, start=1):
         slug = _slugify(row["title"] or row["artifact_type"])
         filename = f"{index:03d}_{row['artifact_type']}_{slug}.md"
@@ -584,6 +619,32 @@ def export_product_artifacts(product_id: int):
         )
         path.write_text(body, encoding="utf-8")
         written.append(str(path))
+        pairs.append((filename, str(path), "export"))
+
+    # Auto-register product_files rows so the operator never loses track of where
+    # an artifact landed on disk. Idempotent via the (product_id, file_path) unique
+    # index applied in db._apply_one_shot_migrations().
+    registered = 0
+    with session_scope() as session:
+        for label, path_str, ftype in pairs:
+            exists = session.scalar(
+                select(ProductFile.id).where(
+                    ProductFile.product_id == product_id,
+                    ProductFile.file_path == path_str,
+                )
+            )
+            if exists:
+                continue
+            session.add(
+                ProductFile(
+                    product_id=product_id,
+                    file_label=label,
+                    file_path=path_str,
+                    file_type=ftype,
+                    notes="auto-registered by artifact export",
+                )
+            )
+            registered += 1
 
     return JSONResponse(
         {
@@ -591,6 +652,7 @@ def export_product_artifacts(product_id: int):
             "exported": written,
             "count": len(written),
             "directory": str(export_dir),
+            "files_registered": registered,
         }
     )
 
@@ -607,6 +669,42 @@ def _hn_demand_velocity(points: int, comments: int) -> float:
     return float(min(100.0, raw))
 
 
+# Sprint 1.3 — keyword-based classifier. NO LLM. Order matters: more specific first.
+_HN_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("agent", "copilot", "cursor", "claude code", "cline", "codex", "aider", "devin"),
+     "AI coding tools", "cheat sheet PDF"),
+    (("rag ", "retrieval augmented", "vector db", "embedding", "pgvector"),
+     "AI infrastructure", "cheat sheet PDF"),
+    (("llm", "language model", " gpt", " gpt-", "chatgpt", "claude ", " claude.", "gemini", "anthropic", "openai"),
+     "AI tools", "prompt pack"),
+    (("kubernetes", "k8s", "terraform", "ansible", "ci/cd", "github actions", "devops", "sre "),
+     "DevOps", "cheat sheet PDF"),
+    (("postgres", "sqlite", "mysql", "mariadb", "duckdb", "database", " sql ", "sqlalchemy"),
+     "Databases", "cheat sheet PDF"),
+    (("react", "next.js", "nextjs", "vue", "svelte", "tailwind", "frontend"),
+     "Frontend", "cheat sheet PDF"),
+    (("rust", "golang", "go ", "python", "typescript", "deno", "bun"),
+     "Programming languages", "prompt pack"),
+    (("security", "vulnerability", "exploit", "infosec", "cve", "pentest"),
+     "Security", "checklist PDF"),
+    (("startup", " yc ", " y combinator", "founder", "saas", "indie hackers"),
+     "Startup playbooks", "Notion template"),
+    (("homelab", "self-host", "selfhosted", "self host"),
+     "Homelab", "cheat sheet PDF"),
+    (("notion", "obsidian", "logseq"),
+     "Knowledge management", "Notion template"),
+)
+
+
+def _hn_classify(title: str) -> tuple[str, str]:
+    """Return (vertical, production_format). Falls back to AI tools / cheat sheet PDF."""
+    t = title.lower()
+    for needles, vertical, fmt in _HN_RULES:
+        if any(n in t for n in needles):
+            return vertical, fmt
+    return "AI tools", "cheat sheet PDF"
+
+
 def _hn_to_candidate(hit: dict) -> dict | None:
     title = (hit.get("title") or "").strip()
     if not title:
@@ -615,15 +713,16 @@ def _hn_to_candidate(hit: dict) -> dict | None:
     comments = int(hit.get("num_comments") or 0)
     url = (hit.get("url") or "").strip()
     created = hit.get("created_at") or ""
+    vertical, production_format = _hn_classify(title)
     evidence = (
         f"HN story '{title}' with {points} points and {comments} comments "
-        f"({created}). Link: {url or 'n/a'}"
+        f"({created}). Link: {url or 'n/a'}. Classified as {vertical} / {production_format}."
     )
     candidate = {
         "source": "HackerNews",
         "topic": title[:200],
-        "vertical": "AI tools",
-        "production_format": "cheat sheet PDF",
+        "vertical": vertical,
+        "production_format": production_format,
         "demand_velocity": _hn_demand_velocity(points, comments),
         "monetization_fit": 60,
         "ai_exploitability": 75,
@@ -726,6 +825,40 @@ def launch_dashboard(request: Request):
             select(Product).order_by(desc(Product.created_at)).limit(5)
         ).all()
 
+        # Sprint 1.3 — channel rollup (revenue grouped by channel_tag).
+        # Group by the raw column; coalesce NULL → "(unattributed)" only in SELECT.
+        channel_rows_raw = session.execute(
+            select(
+                RevenueEvent.channel_tag,
+                func.coalesce(func.sum(RevenueEvent.amount), 0).label("total"),
+                func.count(RevenueEvent.id).label("events"),
+            )
+            .group_by(RevenueEvent.channel_tag)
+            .order_by(desc("total"))
+        ).all()
+        channel_rows = [
+            {"channel": (row.channel_tag or "(unattributed)"),
+             "total": row.total,
+             "events": row.events}
+            for row in channel_rows_raw
+        ]
+
+        # Sprint 1.3 — live products that have no published distribution post.
+        # Subquery: product_ids that DO have at least one published distribution_post.
+        published_product_ids = session.scalars(
+            select(ProductArtifact.product_id)
+            .where(ProductArtifact.artifact_type == "distribution_post")
+            .where(ProductArtifact.published_url.is_not(None))
+            .where(ProductArtifact.published_url != "")
+            .distinct()
+        ).all()
+        missing_distribution = session.scalars(
+            select(Product)
+            .where(Product.status == "live")
+            .where(~Product.id.in_(published_product_ids) if published_product_ids else True)
+            .order_by(desc(Product.created_at))
+        ).all()
+
         return templates.TemplateResponse(
             "launch.html",
             {
@@ -735,6 +868,9 @@ def launch_dashboard(request: Request):
                 "live_count": live_count,
                 "missing_url_products": missing_url_rows,
                 "missing_url_count": len(missing_url_rows),
+                "missing_distribution": missing_distribution,
+                "missing_distribution_count": len(missing_distribution),
+                "channel_rows": channel_rows,
                 "total_revenue": total_revenue,
                 "kill_switch_active": is_kill_switch_active(),
                 "daily_budget": get_daily_budget(),
@@ -742,3 +878,32 @@ def launch_dashboard(request: Request):
                 "latest_products": latest_products,
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.3 — distribution publish tracking
+# ---------------------------------------------------------------------------
+
+
+@app.post("/products/{product_id}/artifacts/{artifact_id}/publish")
+def mark_artifact_published(
+    product_id: int,
+    artifact_id: int,
+    published_url: str = Form(...),
+    channel_tag: str = Form(""),
+):
+    """Record that a distribution_post artifact has been published in a channel."""
+    url = (published_url or "").strip()
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="published_url must start with http:// or https://",
+        )
+    with session_scope() as session:
+        artifact = session.get(ProductArtifact, artifact_id)
+        if not artifact or artifact.product_id != product_id:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        artifact.published_url = url or None
+        artifact.published_at = datetime.utcnow() if url else None
+        artifact.channel_tag = (channel_tag or "").strip().lower() or None
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)

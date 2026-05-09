@@ -22,3 +22,24 @@ Append-only summary of what was verified, with timestamps. One entry per sprint 
 | URL warning: malformed | warn banner "must start with http:// or https://" |
 | URL warning: healthy | good banner "Launch URL ready." |
 | Launch dashboard renders | 200 with all metric cards present |
+
+
+## Sprint 1.3 — 2026-05-08
+
+| Check | Result |
+|---|---|
+| `curl /health` | 200 `{"status":"healthy"}` |
+| `revenue_events.source_attribution` exists | PASS |
+| `revenue_events.channel_tag` exists | PASS |
+| `product_artifacts.published_url` exists | PASS |
+| `product_artifacts.published_at` exists | PASS |
+| `product_artifacts.channel_tag` exists | PASS |
+| Title prefill no longer prefixes `Cheat Sheet Pdf:` | PASS — produced `Show HN: GETadb.com – every GET request creates a DB — Cheat Sheet` |
+| HN classifier routes coding-agent titles → `(AI coding tools, cheat sheet PDF)` | PASS |
+| Artifact export registers `product_files` rows | PASS — 5 rows added on first export of product 35 |
+| Artifact export idempotent on second run | PASS — `files_registered=0` on re-run |
+| Distribution publish stores `channel_tag` | PASS — `twitter` recorded |
+| Malformed publish URL rejected | PASS — HTTP 400 |
+| Revenue with attribution stored | PASS — `channel_tag=twitter` on event |
+| Launch dashboard renders "Revenue by channel" | PASS |
+| Launch dashboard renders "Live without distribution" | PASS |

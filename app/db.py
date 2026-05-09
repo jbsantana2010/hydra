@@ -69,6 +69,10 @@ class ProductArtifact(Base):
     title = Column(Text)
     content = Column(Text, nullable=False)
     source = Column(Text, default="ruflo")
+    # Sprint 1.3 — distribution publish tracking
+    published_url = Column(Text)
+    published_at = Column(DateTime)
+    channel_tag = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -94,6 +98,9 @@ class RevenueEvent(Base):
     currency = Column(Text, default="USD")
     event_type = Column(Text, default="sale")
     notes = Column(Text)
+    # Sprint 1.3 — attribution
+    source_attribution = Column(Text)
+    channel_tag = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -118,7 +125,30 @@ class SystemFlag(Base):
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _apply_one_shot_migrations()
     seed_system_flags()
+
+
+def _apply_one_shot_migrations() -> None:
+    """Idempotent ADD COLUMN statements until Alembic lands in Sprint 2.0.
+
+    Postgres' `IF NOT EXISTS` makes each statement safe to re-run on every
+    startup. Keep this list short and append-only.
+    """
+    # Adding a UNIQUE index on product_files (product_id, file_path) was attempted
+    # but trips on legacy duplicates from Sprint 1.2 verification runs. Defer to
+    # Alembic in Sprint 2.0 with a paired dedupe migration. The export auto-register
+    # path already does an explicit existence check before insert.
+    statements = [
+        "ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS source_attribution TEXT",
+        "ALTER TABLE revenue_events ADD COLUMN IF NOT EXISTS channel_tag TEXT",
+        "ALTER TABLE product_artifacts ADD COLUMN IF NOT EXISTS published_url TEXT",
+        "ALTER TABLE product_artifacts ADD COLUMN IF NOT EXISTS published_at TIMESTAMP",
+        "ALTER TABLE product_artifacts ADD COLUMN IF NOT EXISTS channel_tag TEXT",
+    ]
+    with engine.begin() as conn:
+        for stmt in statements:
+            conn.exec_driver_sql(stmt)
 
 
 def seed_system_flags() -> None:

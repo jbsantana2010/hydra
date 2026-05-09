@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Local env / secrets
+.env
+.env.local
+*.env
+
+# Ruflo install (Node modules + lockfile too noisy for repo)
+ruflo/
+
+# Operator-built launch packages (manual ZIP/PDF artifacts)
+products/
+
+# Exported artifacts (kept on host but not in repo)
+exports/product_*/
+!exports/.gitkeep
+
+# Backups
+backups/
+
+# DB dumps
+*.dump
+*.dump.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/

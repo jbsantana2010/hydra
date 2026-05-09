@@ -85,6 +85,34 @@
         <section class="panel">
           <h3>{{ artifact.title or artifact.artifact_type }}</h3>
           <p class="muted">{{ artifact.artifact_type }} from {{ artifact.source }} - {{ artifact.created_at }}</p>
+
+          {% if artifact.artifact_type == "distribution_post" %}
+            {% if artifact.published_url %}
+              <div class="banner good" style="margin-bottom: 10px;">
+                Published to <a href="{{ artifact.published_url }}">{{ artifact.published_url }}</a>
+                {% if artifact.channel_tag %} on <strong>{{ artifact.channel_tag }}</strong>{% endif %}
+                at {{ artifact.published_at }}
+              </div>
+            {% else %}
+              <div class="banner warn" style="margin-bottom: 10px;">
+                Not yet published. Record where this post went:
+              </div>
+            {% endif %}
+            <form class="form-grid" method="post" action="/products/{{ product.id }}/artifacts/{{ artifact.id }}/publish" style="margin-bottom: 10px;">
+              <label class="wide">
+                Published URL
+                <input name="published_url" type="url" required placeholder="https://..."
+                       value="{{ artifact.published_url or '' }}">
+              </label>
+              <label>
+                Channel tag
+                <input name="channel_tag" placeholder="twitter / reddit / hn / blog"
+                       value="{{ artifact.channel_tag or '' }}">
+              </label>
+              <button class="secondary" type="submit">Mark Published</button>
+            </form>
+          {% endif %}
+
           <pre>{{ artifact.content }}</pre>
         </section>
       {% endfor %}

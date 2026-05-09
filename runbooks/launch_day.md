@@ -87,3 +87,35 @@ Allowed statuses: `draft`, `generated`, `listed`, `live`, `paused`, `archived`.
 - Customer support and refunds.
 - Pricing decisions.
 - Any spending — the daily budget is informational until a paid-API workflow exists.
+
+
+## Sprint 1.3 — Launch Learning v1
+
+### Recording where a launch post went
+
+1. After publishing the launch post manually (Twitter, Reddit, HN, blog, Discord, etc.), open the product's edit page in HYDRA.
+2. Find the `distribution_post` artifact.
+3. In the form below it, paste the URL of the post and a short `channel_tag` (`twitter`, `reddit`, `hn`, `blog`, `discord`, `newsletter`).
+4. Click "Mark Published". The artifact will now show a green banner with the URL, channel, and publish timestamp.
+5. The launch dashboard's "Live without distribution" metric will drop by one.
+
+### Logging a sale with attribution
+
+1. Open `Revenue`.
+2. Pick the product, fill in `amount` and `currency`.
+3. Set `channel_tag` to match the channel that drove the sale (`twitter`, `reddit`, etc.).
+4. Paste the URL of the post into `Source attribution`.
+5. Optionally add notes.
+6. Add Revenue. The launch dashboard's "Revenue by channel" rollup updates immediately.
+
+### Approving a new candidate (Sprint 1.3 prefill)
+
+1. On Opportunities, click Approve.
+2. The new product's edit page now shows a clean title like `"Topic name — Cheat Sheet"` (no awkward `Pdf:` prefix).
+3. HN candidates are routed to a more specific `vertical` and `production_format` pair via the keyword classifier (`AI coding tools / cheat sheet PDF` for agent-related stories, etc.).
+
+### Exporting artifacts also tracks the files
+
+1. On the product edit page, click "Export Artifacts to /exports".
+2. Markdown files appear under `./exports/product_<id>/` AND `product_files` rows are auto-registered for each export.
+3. The Files section on the edit page now shows them; running export again does not duplicate.

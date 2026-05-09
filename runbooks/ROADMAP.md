@@ -824,3 +824,88 @@ Quietly slipping marketplace credentials into a Zone A prompt because "Ruflo wou
 - **Claude (architecture / prompt design):** read the full doc when starting a session. Update Part 2 metadata as sprints ship. Refuse to begin a Category B task without explicitly identifying the affected sprint.
 - **Codex (implementation):** read Part 4 and the relevant Part 2 sprint entry. Refuse to start coding if a sprint is ambiguous; ask for the spec instead. Always finish with the handoff artifacts in Part 5.
 - **ChatGPT or any other agent:** read Part 5 first; produce the recovery paragraph before doing anything else.
+
+
+---
+
+## Appendix D — Sprint 1.3 actual outcome (logged 2026-05-08)
+
+Sprint 1.3 was pivoted from the originally-planned "Controlled LLM Execution Layer" to **Launch Learning v1** with operator approval. The original LLM-execution-layer scope is reassigned to **Sprint 1.4** below. The roadmap dependency graph in Appendix A is unchanged in shape; only the labels move down by one.
+
+Reasoning: after product 35 launched on real signal, the binding constraint flipped from "we have no LLM client" to "we have no attribution data on the one real launch." Sprint 1.3 closed the latter; Sprint 1.4 will close the former.
+
+Sprint 1.3 shipped: attribution columns + idempotent `ALTER` migrations, distribution-post publish flow, sale attribution form, channel rollup on `/launch`, "Live without distribution" metric, title prefill cleanup, keyword-based HN classifier, auto-registration of `product_files` on export, `.gitignore`. Verified PASS in `scripts/verify_sprint13.sh` (13/13). See `runbooks/sprint_1.3_handoff.md`.
+
+---
+
+## Appendix E — Sprint 1.4 plan (paste-ready spec)
+
+> **For the next session:** if you are picking up cold, read `runbooks/CLAUDE_RESUME_PROMPT.md`, run the inspection block, produce the strategic evaluation, then implement this spec. Reject any of the listed scope creep.
+
+### Sprint 1.4 — Controlled LLM Execution Layer
+
+- **Objective:** Introduce a single, budget-guarded LLM client and use it to upgrade two existing surfaces (HN classifier, approval prefill notes). No autonomous swarm. No new collectors. No publishing.
+- **Why now:** Sprint 1.3 made attribution data available. The next compounding lever is turning the `evidence` field — already paid for — into better classification and prefill, which the operator can edit in seconds instead of minutes.
+
+#### Features (do all)
+
+1. **`app/llm.py` — single client, two providers, hard guards.**
+   - Methods: `complete(prompt, *, model, max_tokens, agent="generic", purpose="...")` — returns the completion string.
+   - Providers: Anthropic (Claude Haiku) primary; OpenAI (`gpt-4o-mini`) fallback. Both keys via env. Fail closed if neither is set.
+   - Hard daily cap: read `daily_budget_usd` system flag. If today's `llm_calls.cost_usd` sum + estimated cost of this call > cap, raise `BudgetExceeded` BEFORE the call.
+   - Per-call cap: max $0.20 estimated cost. Reject larger.
+   - Kill-switch: `assert_system_can_act("llm_call")` before any provider call.
+   - Timeout: 20 s per call. Single retry on transient errors (5xx / network), no retry on 4xx.
+   - Logs: every call writes a `llm_calls` row (id, model, agent, purpose, prompt_tokens, completion_tokens, cost_usd, duration_ms, status, occurred_at).
+2. **`llm_calls` table.** New SQLAlchemy model. Auto-created at startup like the others.
+3. **Settings page extension.** Show today's spend vs cap, count of calls, last-call timestamp.
+4. **Replace `_hn_classify` with an LLM classifier.**
+   - Keep the existing rules-based router as the deterministic fallback for budget-exceeded / kill-switch / API-failure paths.
+   - Prompt: "Given this HN story title and snippet, classify the buyer audience and best digital-product format. Return strict JSON with `vertical` and `production_format`."
+   - Cost ceiling per call: $0.0005 (Haiku at ~200 tokens).
+5. **Replace the deterministic notes block in `build_default_product_fields()` with an LLM-generated structured notes block.**
+   - Prompt: includes the candidate's `evidence`, `vertical`, `production_format`, and `topic`. Returns: 8-line outline + buyer pain summary + suggested deliverable structure.
+   - Cost ceiling per call: $0.001.
+   - Falls back to the existing deterministic block on any failure.
+6. **Verification script** `scripts/verify_sprint14.sh`:
+   - Asserts `llm_calls` table exists with expected columns.
+   - Asserts a real call lands a row with `cost_usd > 0`.
+   - Asserts kill switch ON blocks the call (HTTP error or fallback path triggered).
+   - Asserts setting `daily_budget_usd=0` triggers the `BudgetExceeded` fallback path.
+   - Asserts the LLM classifier returns valid JSON for at least one fixture title.
+
+#### Dependencies
+
+- 1.3 (attribution) — DONE.
+- Anthropic and/or OpenAI API key in `.env`.
+
+#### Risks
+
+- **Spend leak.** Mitigated by pre-call budget check + per-call cap + circuit breaker on consecutive failures.
+- **Hallucinated classification.** Mitigated by the rules-based fallback remaining the source of truth on parse failures.
+- **Schema drift.** New table only (additive); safe under `create_all`.
+
+#### Complexity / duration
+
+- M-L. ~1–1.5 focused days.
+
+#### Acceptance
+
+- Budget cap enforced before the call, not after.
+- Kill switch blocks LLM calls cleanly.
+- Both upgraded surfaces (HN classifier, prefill notes) fall back deterministically on any failure.
+- `verify_sprint14.sh` PASS.
+
+#### Do NOT add in 1.4
+
+- A real Reddit / Product Hunt collector.
+- Automated publishing or distribution.
+- Streaming or async LLM calls.
+- A vector store or embeddings (defer to 2.2 with clustering).
+- Replacement of basic auth.
+- Any UI prettification beyond the Settings spend readout.
+- Background scheduling.
+
+#### Files expected to change
+
+- `app/llm.py` (new), `app/db.py` (new model + import), `app/main.py` (replace classifier + prefill calls; budget readout in `/settings`), `app/templates/settings.html`, `requirements.txt` (add `anthropic` and `openai` SDKs), `.env.example` (add `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), `scripts/verify_sprint14.sh` (new), runbooks updated per template.
