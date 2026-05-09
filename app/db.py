@@ -123,6 +123,22 @@ class SystemFlag(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class LlmCall(Base):
+    __tablename__ = "llm_calls"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(Text)
+    model = Column(Text)
+    purpose = Column(Text)
+    prompt_tokens = Column(Integer, default=0)
+    completion_tokens = Column(Integer, default=0)
+    cost_usd = Column(Numeric, default=0)
+    duration_ms = Column(Integer)
+    status = Column(Text)
+    error = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _apply_one_shot_migrations()

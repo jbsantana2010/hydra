@@ -28,6 +28,7 @@
   <section class="panel">
     <h3>Daily Budget</h3>
     <p class="muted">Current value: ${{ "%.2f"|format(daily_budget) }}</p>
+    <p class="muted">Today's LLM spend: ${{ "%.4f"|format(today_llm_spend) }} / ${{ "%.2f"|format(daily_budget) }}</p>
     <form class="form-grid" method="post" action="/settings/budget">
       <label>
         Daily budget USD
@@ -35,5 +36,37 @@
       </label>
       <button type="submit">Update Budget</button>
     </form>
+  </section>
+
+  <section class="panel" style="margin-top: 18px;">
+    <h3>Recent LLM Calls</h3>
+    {% if recent_llm_calls %}
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Model</th>
+            <th>Purpose</th>
+            <th>Cost</th>
+            <th>Status</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for call in recent_llm_calls %}
+            <tr>
+              <td>{{ call.provider or "n/a" }}</td>
+              <td>{{ call.model or "n/a" }}</td>
+              <td>{{ call.purpose }}</td>
+              <td>${{ "%.6f"|format(call.cost_usd) }}</td>
+              <td><span class="status">{{ call.status }}</span></td>
+              <td>{{ call.created_at }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No LLM calls logged yet.</p>
+    {% endif %}
   </section>
 {% endblock %}

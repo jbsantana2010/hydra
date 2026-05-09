@@ -35,6 +35,11 @@ services:
       HYDRA_BASIC_PASS: ${HYDRA_BASIC_PASS:-change-me}
       HYDRA_EXPORT_ROOT: /app/exports
       HYDRA_LOG_ROOT: /app/logs
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      HYDRA_LLM_PRIMARY: ${HYDRA_LLM_PRIMARY:-anthropic}
+      HYDRA_LLM_FALLBACK: ${HYDRA_LLM_FALLBACK:-openai}
+      HYDRA_LLM_PER_CALL_CAP_USD: ${HYDRA_LLM_PER_CALL_CAP_USD:-0.20}
     volumes:
       - ./exports:/app/exports
       - ./logs:/app/logs

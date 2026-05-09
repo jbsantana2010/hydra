@@ -72,6 +72,34 @@ Entry format:
 - Next:
   - Follow `runbooks/ROADMAP.md` immediate next sprint recommendation unless operator overrides.
 
+## 2026-05-09T03:55:00Z - Sprint 1.4 Controlled LLM Execution Layer
+
+- Commit: `unknown`
+- Executor: Codex
+- Files changed:
+  - `app/llm.py`
+  - `app/db.py`
+  - `app/main.py`
+  - `app/templates/settings.html`
+  - `app/requirements.txt`
+  - `.env.example`
+  - `docker-compose.yml`
+  - `scripts/verify_sprint14.sh`
+  - `runbooks/sprint_1.4_handoff.md`
+  - `runbooks/known_issues.md`
+  - `runbooks/verification_results.md`
+  - `runbooks/commands_run.md`
+  - `runbooks/rollback.md`
+- Verification:
+  - `python3 -m py_compile app/main.py app/db.py app/llm.py` PASS.
+  - `./scripts/dev_up.sh` PASS.
+  - `./scripts/verify_sprint14.sh` PASS without API keys, proving fallback and guard behavior.
+- Known issues:
+  - Real provider smoke is conditional on API keys.
+  - Cost accounting is conservative unless provider usage metadata is returned.
+- Next:
+  - Choose between launch experiments, Reddit collector, packaging improvements, or attribution/source-weight learning. Recommendation: packaging improvements unless a Reddit niche list is ready.
+
 ## 2026-05-09T00:01:46Z - Sprint Closeout Snapshot
 
 - Commit: `unknown`

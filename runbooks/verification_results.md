@@ -43,3 +43,24 @@ Append-only summary of what was verified, with timestamps. One entry per sprint 
 | Revenue with attribution stored | PASS — `channel_tag=twitter` on event |
 | Launch dashboard renders "Revenue by channel" | PASS |
 | Launch dashboard renders "Live without distribution" | PASS |
+
+
+## Sprint 1.4 — 2026-05-09
+
+| Check | Result |
+|---|---|
+| `python3 -m py_compile app/main.py app/db.py app/llm.py` | PASS |
+| `./scripts/dev_up.sh` | PASS |
+| `scripts/verify_sprint14.sh` | PASS |
+| App imports | PASS — `main`, `llm`, `db.LlmCall` import cleanly |
+| `llm_calls` table columns | PASS — id, provider, model, purpose, prompt/completion tokens, cost, duration, status, error, created_at |
+| `/health` | PASS |
+| Settings LLM spend readout | PASS |
+| Settings recent LLM calls table | PASS |
+| Kill switch blocks `llm_call` | PASS — `LlmBlocked`, row logged |
+| `daily_budget_usd=0` blocks `llm_call` before provider call | PASS — `LlmBlocked`, row logged |
+| API-key-free local fallback | PASS — no route crash without keys |
+| HN classifier fallback | PASS |
+| HN collection without keys | PASS — returned HackerNews JSON using fallback classification |
+| Product approval prefill without keys | PASS — draft product created with deterministic notes |
+| Existing Products/Revenue/Launch routes | PASS |

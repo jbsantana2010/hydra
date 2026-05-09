@@ -16,6 +16,7 @@ from sqlalchemy import desc, func, select
 
 from db import (
     Approval,
+    LlmCall,
     OpportunityCandidate,
     Product,
     ProductArtifact,
@@ -29,6 +30,7 @@ from db import (
     session_scope,
     set_flag_value,
 )
+from llm import LlmBlocked, LlmFailed, call_llm_json, get_today_llm_spend
 from ruflo_bridge import build_ruflo_listing_prompt, build_ruflo_product_prompt
 from signal_engine import calculate_score, mock_candidates
 
@@ -144,7 +146,7 @@ def approve_opportunity(candidate_id: int):
             select(Product).where(Product.opportunity_id == candidate_id)
         )
         if product is None:
-            defaults = build_default_product_fields(candidate)
+            defaults = build_default_product_fields(candidate, session)
             product = Product(
                 opportunity_id=candidate_id,
                 title=defaults["title"],
@@ -361,14 +363,21 @@ def create_revenue_event(
 
 @app.get("/settings")
 def settings(request: Request):
-    return templates.TemplateResponse(
-        "settings.html",
-        {
-            "request": request,
-            "kill_switch_active": is_kill_switch_active(),
-            "daily_budget": get_daily_budget(),
-        },
-    )
+    with session_scope() as session:
+        recent_llm_calls = session.scalars(
+            select(LlmCall).order_by(desc(LlmCall.created_at)).limit(8)
+        ).all()
+        today_llm_spend = get_today_llm_spend(session)
+        return templates.TemplateResponse(
+            "settings.html",
+            {
+                "request": request,
+                "kill_switch_active": is_kill_switch_active(),
+                "daily_budget": get_daily_budget(),
+                "today_llm_spend": today_llm_spend,
+                "recent_llm_calls": recent_llm_calls,
+            },
+        )
 
 
 @app.post("/settings/kill-switch")
@@ -461,10 +470,22 @@ def _format_short_label(production_format: str | None) -> str:
     return "Pack"
 
 
-def build_default_product_fields(candidate: OpportunityCandidate) -> dict:
-    """Deterministic prefill so 'Approve' lands the operator on a populated draft."""
+def build_default_product_fields(candidate: OpportunityCandidate, db=None) -> dict:
+    """Prefill a draft product, using LLM notes only when guarded calls succeed."""
     short = _format_short_label(candidate.production_format)
     title = _truncate_title(f"{candidate.topic} — {short}")
+    notes = _build_llm_product_notes(candidate, db) if db is not None else None
+    if notes is None:
+        notes = _build_deterministic_product_notes(candidate)
+    return {
+        "title": title,
+        "production_format": candidate.production_format,
+        "price": _suggest_price(candidate.production_format),
+        "notes": notes,
+    }
+
+
+def _build_deterministic_product_notes(candidate: OpportunityCandidate) -> str:
     score = candidate.score if candidate.score is not None else 0
     notes_lines = [
         f"Source: {candidate.source}",
@@ -485,12 +506,65 @@ def build_default_product_fields(candidate: OpportunityCandidate) -> dict:
         "Operator notes:",
         "(edit before generation)",
     ]
-    return {
-        "title": title,
-        "production_format": candidate.production_format,
-        "price": _suggest_price(candidate.production_format),
-        "notes": "\n".join(notes_lines),
+    return "\n".join(notes_lines)
+
+
+def _build_llm_product_notes(candidate: OpportunityCandidate, db) -> str | None:
+    schema = {
+        "product_angle": "string",
+        "target_buyer": "string",
+        "pain_point": "string",
+        "suggested_deliverables": ["string"],
+        "distribution_angle": "string",
+        "risk_notes": "string",
     }
+    system_prompt = (
+        "You are HYDRA Zone B support code. Produce operator-editable product draft notes only. "
+        "Do not write final product content. Do not claim legal, medical, political, or financial advice."
+    )
+    user_prompt = (
+        f"Topic: {candidate.topic}\n"
+        f"Source: {candidate.source}\n"
+        f"Vertical: {candidate.vertical}\n"
+        f"Production format: {candidate.production_format}\n"
+        f"Evidence: {candidate.evidence or '(none)'}\n\n"
+        "Return concise structured notes with product angle, target buyer, pain point, suggested deliverables, "
+        "distribution angle, and risk notes."
+    )
+    try:
+        data = call_llm_json(
+            db,
+            purpose="product_prefill",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema_hint=schema,
+            max_cost_usd=0.001,
+            timeout_seconds=20,
+        )
+    except (LlmBlocked, LlmFailed):
+        return None
+
+    deliverables = data.get("suggested_deliverables") or []
+    if not isinstance(deliverables, list):
+        deliverables = [str(deliverables)]
+    lines = [
+        "LLM-assisted draft notes (operator must review):",
+        f"Product angle: {str(data.get('product_angle') or '').strip()}",
+        f"Target buyer: {str(data.get('target_buyer') or '').strip()}",
+        f"Pain point: {str(data.get('pain_point') or '').strip()}",
+        "Suggested deliverables:",
+    ]
+    lines.extend(f"- {str(item).strip()}" for item in deliverables[:8] if str(item).strip())
+    lines.extend(
+        [
+            f"Distribution angle: {str(data.get('distribution_angle') or '').strip()}",
+            f"Risk notes: {str(data.get('risk_notes') or 'None noted').strip()}",
+            "",
+            "Operator notes:",
+            "(edit before generation)",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def check_gumroad_url(product: Product) -> dict | None:
@@ -696,7 +770,7 @@ _HN_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
 )
 
 
-def _hn_classify(title: str) -> tuple[str, str]:
+def _hn_classify_rules(title: str) -> tuple[str, str]:
     """Return (vertical, production_format). Falls back to AI tools / cheat sheet PDF."""
     t = title.lower()
     for needles, vertical, fmt in _HN_RULES:
@@ -705,7 +779,57 @@ def _hn_classify(title: str) -> tuple[str, str]:
     return "AI tools", "cheat sheet PDF"
 
 
-def _hn_to_candidate(hit: dict) -> dict | None:
+def _hn_classify(title: str, snippet: str = "", db=None):
+    """Classify HN story. LLM attempts fall back to the Sprint 1.3 keyword router."""
+    if db is None:
+        vertical, fmt = _hn_classify_rules(title)
+        return vertical, fmt
+
+    schema = {
+        "vertical": "AI coding tools",
+        "production_format": "cheat sheet PDF",
+        "topic_normalized": "Safe AI Coding Agent Workflow",
+        "monetization_angle": "rollback workflows and prompt guardrails for developers",
+        "risk_flags": ["none"],
+    }
+    system_prompt = (
+        "Given a HackerNews story title and snippet, classify the buyer audience and best digital-product format. "
+        "Return strict JSON only. Do not recommend political, medical, financial, or legal advice products unless "
+        "risk_flags names the risk. Do not suggest trademark-copying products."
+    )
+    user_prompt = f"Title: {title}\nSnippet: {snippet or '(none)'}"
+    try:
+        data = call_llm_json(
+            db,
+            purpose="hn_classification",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema_hint=schema,
+            max_cost_usd=0.0005,
+            timeout_seconds=20,
+        )
+        vertical = str(data.get("vertical") or "").strip()
+        fmt = str(data.get("production_format") or "").strip()
+        if not vertical or not fmt:
+            raise ValueError("Missing vertical or production_format")
+        risk_flags = data.get("risk_flags")
+        if _looks_like_regulated_advice(vertical, title) and not risk_flags:
+            data["risk_flags"] = ["regulated-advice-risk"]
+        return vertical[:80], fmt[:80], data
+    except (LlmBlocked, LlmFailed, ValueError):
+        vertical, fmt = _hn_classify_rules(title)
+        return vertical, fmt, None
+
+
+def _looks_like_regulated_advice(vertical: str, title: str) -> bool:
+    text = f"{vertical} {title}".lower()
+    return any(
+        word in text
+        for word in ("medical", "health", "legal", "law", "financial", "invest", "political")
+    )
+
+
+def _hn_to_candidate(hit: dict, db=None) -> dict | None:
     title = (hit.get("title") or "").strip()
     if not title:
         return None
@@ -713,11 +837,23 @@ def _hn_to_candidate(hit: dict) -> dict | None:
     comments = int(hit.get("num_comments") or 0)
     url = (hit.get("url") or "").strip()
     created = hit.get("created_at") or ""
-    vertical, production_format = _hn_classify(title)
+    snippet = (hit.get("story_text") or hit.get("comment_text") or "").strip()
+    classified = _hn_classify(title, snippet, db)
+    if len(classified) == 2:
+        vertical, production_format = classified
+        llm_meta = None
+    else:
+        vertical, production_format, llm_meta = classified
     evidence = (
         f"HN story '{title}' with {points} points and {comments} comments "
         f"({created}). Link: {url or 'n/a'}. Classified as {vertical} / {production_format}."
     )
+    if llm_meta:
+        evidence += (
+            f" LLM normalized topic: {llm_meta.get('topic_normalized', 'n/a')}. "
+            f"Monetization angle: {llm_meta.get('monetization_angle', 'n/a')}. "
+            f"Risk flags: {', '.join(llm_meta.get('risk_flags') or ['none'])}."
+        )
     candidate = {
         "source": "HackerNews",
         "topic": title[:200],
@@ -757,11 +893,10 @@ def collect_hn(query: str = Form(HN_DEFAULT_QUERY)):
         raise HTTPException(status_code=502, detail=f"HN fetch failed: {exc}") from exc
 
     hits = payload.get("hits", [])[:HN_MAX_HITS]
-    candidates = [c for c in (_hn_to_candidate(h) for h in hits) if c]
-
     inserted = 0
     skipped = 0
     with session_scope() as session:
+        candidates = [c for c in (_hn_to_candidate(h, session) for h in hits) if c]
         for candidate in candidates:
             exists = session.scalar(
                 select(OpportunityCandidate.id).where(

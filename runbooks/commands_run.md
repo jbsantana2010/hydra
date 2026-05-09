@@ -23,6 +23,19 @@ scripts/verify_url_warnings.sh 34
 python3 -m py_compile app/main.py app/db.py app/signal_engine.py app/ruflo_bridge.py
 ```
 
+## Sprint 1.4
+
+```bash
+sed -n '1,320p' runbooks/ROADMAP.md
+grep -n "Sprint 1.4" -A120 -B20 runbooks/ROADMAP.md
+sed -n '1,260p' runbooks/sprint_1.3_handoff.md
+sed -n '1,220p' runbooks/known_issues.md
+sed -n '1,220p' runbooks/verification_results.md
+python3 -m py_compile app/main.py app/db.py app/llm.py
+./scripts/dev_up.sh
+./scripts/verify_sprint14.sh
+```
+
 
 ## Sprint 1.3
 

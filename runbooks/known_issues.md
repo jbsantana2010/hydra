@@ -11,6 +11,8 @@ Severities: `low` / `medium` / `high`.
 
 ---
 
+- 2026-05-09 [sprint 1.4] **low** — LLM token and cost accounting uses conservative estimates unless provider usage metadata is returned. `app/llm.py`. Mitigation: pre-call estimates are rounded up and capped before spend.
+- 2026-05-09 [sprint 1.4] **low** — Verification without API keys proves fallback/guard behavior only; a real provider smoke is conditional on `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. `scripts/verify_sprint14.sh`. Mitigation: script automatically runs a real JSON call when keys are present.
 - 2026-05-08 [sprint 1.2] **medium** — `init_db()` runs `create_all()`; column changes will need manual migration or destructive reset. `app/db.py:init_db`. Plan: Sprint 2.0 baselines Alembic.
 - 2026-05-08 [sprint 1.2] **medium** — HTTP basic auth, single user, no CSRF. Acceptable on localhost; **block any public exposure** until upgraded.
 - 2026-05-08 [sprint 1.2] **low-medium** — FastAPI container runs as root; exported files land as `root:root` on the host. `app/Dockerfile`. Fix in 1.3 with non-root user.

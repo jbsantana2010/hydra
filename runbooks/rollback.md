@@ -45,3 +45,27 @@ One section per sprint that introduced an irreversible or risky change. Each sec
   ALTER TABLE product_artifacts DROP COLUMN IF EXISTS channel_tag;
   ```
 - **Auto-registered `product_files` rows for product 35** are deletable; the actual exported Markdown remains in `./exports/product_35/`.
+### Sprint 1.4 — Controlled LLM Execution Layer
+
+Code rollback:
+
+```bash
+git checkout HEAD -- app/db.py app/main.py app/templates/settings.html app/requirements.txt .env.example docker-compose.yml
+rm -f app/llm.py scripts/verify_sprint14.sh runbooks/sprint_1.4_handoff.md
+docker compose up -d --build
+```
+
+Data rollback is optional. The new `llm_calls` table is append-only, nullable, and harmless if left in place.
+
+Only drop it if a clean local reset is required:
+
+```sql
+DROP TABLE IF EXISTS llm_calls;
+```
+
+Operational rollback:
+
+```bash
+curl -u admin:change-me -X POST -F enabled=false http://localhost:8000/settings/kill-switch
+curl -u admin:change-me -X POST -F daily_budget_usd=3 http://localhost:8000/settings/budget
+```
