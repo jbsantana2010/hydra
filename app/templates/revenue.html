@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Revenue</h2>
+
+  <section class="panel" style="margin: 18px 0;">
+    <div class="muted">Total revenue</div>
+    <div class="metric">${{ "%.2f"|format(total) }}</div>
+  </section>
+
+  <form class="form-grid" method="post" action="/revenue">
+    <label class="wide">
+      Product
+      <select name="product_id" required>
+        {% for product in products %}
+          <option value="{{ product.id }}">{{ product.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Marketplace
+      <input name="marketplace" value="gumroad">
+    </label>
+    <label>
+      Amount
+      <input name="amount" type="number" min="0" step="0.01" required>
+    </label>
+    <label>
+      Currency
+      <input name="currency" value="USD">
+    </label>
+    <label>
+      Event type
+      <input name="event_type" value="sale">
+    </label>
+    <label class="wide">
+      Notes
+      <textarea name="notes" rows="3"></textarea>
+    </label>
+    <button type="submit" {% if not products %}disabled{% endif %}>Add Revenue</button>
+  </form>
+
+  <h3>Revenue By Product</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Product</th>
+        <th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in by_product_rows %}
+        <tr>
+          <td>{{ row.title }}</td>
+          <td>${{ "%.2f"|format(row.total) }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 style="margin-top: 24px;">Events</h3>
+  {% if events %}
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Product ID</th>
+          <th>Marketplace</th>
+          <th>Amount</th>
+          <th>Type</th>
+          <th>Notes</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in events %}
+          <tr>
+            <td>{{ event.id }}</td>
+            <td>{{ event.product_id }}</td>
+            <td>{{ event.marketplace }}</td>
+            <td>{{ event.currency }} {{ "%.2f"|format(event.amount) }}</td>
+            <td>{{ event.event_type }}</td>
+            <td>{{ event.notes }}</td>
+            <td>{{ event.created_at }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No revenue events yet.</p>
+  {% endif %}
+{% endblock %}

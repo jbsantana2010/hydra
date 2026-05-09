@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Add Artifact</h2>
+  <p class="muted">Product: {{ product.title }}</p>
+
+  <form class="form-grid" method="post" action="/products/{{ product.id }}/artifacts">
+    <label>
+      Type
+      <select name="artifact_type" required>
+        {% for artifact_type in artifact_types %}
+          <option value="{{ artifact_type }}">{{ artifact_type }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Source
+      <input name="source" value="ruflo">
+    </label>
+    <label class="wide">
+      Title
+      <input name="title" placeholder="Optional artifact title">
+    </label>
+    <label class="wide">
+      Content
+      <textarea name="content" rows="14" required></textarea>
+    </label>
+    <button type="submit">Store Artifact</button>
+    <a class="button" href="/products/{{ product.id }}/edit">Cancel</a>
+  </form>
+{% endblock %}

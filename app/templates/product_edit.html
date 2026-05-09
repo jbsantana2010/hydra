@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Edit Product</h2>
+
+  {% if url_check %}
+    <div class="banner {% if url_check.level == 'good' %}good{% else %}warn{% endif %}">
+      {{ url_check.message }}
+    </div>
+  {% endif %}
+
+  <form class="form-grid" method="post" action="/products/{{ product.id }}/edit">
+    <label class="wide">
+      Title
+      <input name="title" required value="{{ product.title }}">
+    </label>
+    <label>
+      Price
+      <input name="price" type="number" min="0" step="0.01" value="{{ product.price }}">
+    </label>
+    <label>
+      Status
+      <select name="status">
+        {% for status in statuses %}
+          <option value="{{ status }}" {% if product.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="wide">
+      Production format
+      <input name="production_format" value="{{ product.production_format or '' }}">
+    </label>
+    <label class="wide">
+      Gumroad URL
+      <input name="gumroad_url" type="url" value="{{ product.gumroad_url or '' }}" placeholder="https://...">
+    </label>
+    <label class="wide">
+      Notes
+      <textarea name="notes" rows="4">{{ product.notes or '' }}</textarea>
+    </label>
+    <button type="submit">Save Product</button>
+    <a class="button" href="/products/{{ product.id }}/artifacts/new">Add Artifact</a>
+    <a class="button secondary" href="/products/{{ product.id }}/files/new">Add File</a>
+  </form>
+
+  <div class="actions">
+    <form method="post" action="/products/{{ product.id }}/artifacts/export">
+      <button class="secondary" type="submit">Export Artifacts to /exports</button>
+    </form>
+    <span class="muted">Writes one Markdown file per artifact under exports/product_{{ product.id }}/</span>
+  </div>
+
+  <h3>Files</h3>
+  {% if files %}
+    <table>
+      <thead>
+        <tr>
+          <th>Label</th>
+          <th>Path</th>
+          <th>Type</th>
+          <th>Notes</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for file in files %}
+          <tr>
+            <td><strong>{{ file.file_label }}</strong></td>
+            <td><code>{{ file.file_path }}</code></td>
+            <td>{{ file.file_type }}</td>
+            <td>{{ file.notes }}</td>
+            <td>{{ file.created_at }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No file records yet. Use Add File to track ZIP/PDF/Markdown package paths.</p>
+  {% endif %}
+
+  <h3>Artifacts</h3>
+  {% if artifacts %}
+    <div class="stack" style="margin-top: 14px;">
+      {% for artifact in artifacts %}
+        <section class="panel">
+          <h3>{{ artifact.title or artifact.artifact_type }}</h3>
+          <p class="muted">{{ artifact.artifact_type }} from {{ artifact.source }} - {{ artifact.created_at }}</p>
+          <pre>{{ artifact.content }}</pre>
+        </section>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">No artifacts yet. Paste Ruflo/Claude/Codex output into Zone B with Add Artifact.</p>
+  {% endif %}
+{% endblock %}

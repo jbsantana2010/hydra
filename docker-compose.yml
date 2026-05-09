@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hydra}
+      POSTGRES_USER: ${POSTGRES_USER:-hydra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hydra}
+    ports:
+      - "5432:5432"
+    volumes:
+      - hydra_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hydra -d hydra"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  hydra-console:
+    build:
+      context: ./app
+    environment:
+      DATABASE_URL: postgresql+psycopg://hydra:hydra@postgres:5432/hydra
+      REDIS_URL: redis://redis:6379/0
+      HYDRA_BASIC_USER: ${HYDRA_BASIC_USER:-admin}
+      HYDRA_BASIC_PASS: ${HYDRA_BASIC_PASS:-change-me}
+      HYDRA_EXPORT_ROOT: /app/exports
+      HYDRA_LOG_ROOT: /app/logs
+    volumes:
+      - ./exports:/app/exports
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  hydra_postgres_data:

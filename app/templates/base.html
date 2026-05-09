@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HYDRA Console</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #18212f;
+        --muted: #5f6c7b;
+        --line: #d9e1ea;
+        --surface: #f6f8fb;
+        --accent: #0b6bcb;
+        --good: #0f7b4f;
+        --warn: #a35d00;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        color: var(--ink);
+        background: #ffffff;
+      }
+      header {
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+      }
+      .wrap {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 64px;
+      }
+      h1, h2, h3 { margin: 0; }
+      h1 { font-size: 24px; }
+      main { padding: 24px 0 48px; }
+      nav a {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 700;
+        margin-left: 16px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 18px;
+        background: #fff;
+        border: 1px solid var(--line);
+      }
+      th, td {
+        padding: 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: var(--surface);
+        font-size: 13px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      tr:last-child td { border-bottom: 0; }
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin: 18px 0;
+      }
+      button, .button {
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #fff;
+        border-radius: 6px;
+        padding: 9px 12px;
+        font-weight: 700;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      button.secondary {
+        background: #fff;
+        color: var(--accent);
+      }
+      input, select, textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 9px 10px;
+        font: inherit;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        align-items: end;
+        padding: 16px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        margin: 18px 0;
+      }
+      .wide { grid-column: span 2; }
+      .status {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 12px;
+        font-weight: 700;
+        background: #edf3f8;
+      }
+      .status.approved { background: #e6f5ee; color: var(--good); }
+      .status.live, .status.listed { background: #e6f5ee; color: var(--good); }
+      .status.paused { background: #fff3df; color: var(--warn); }
+      .score {
+        font-weight: 800;
+        color: var(--accent);
+      }
+      pre {
+        white-space: pre-wrap;
+        border: 1px solid var(--line);
+        background: #101820;
+        color: #f5f7fa;
+        padding: 16px;
+        border-radius: 6px;
+        overflow: auto;
+      }
+      .muted { color: var(--muted); }
+      .stack { display: grid; gap: 14px; }
+      .panel {
+        border: 1px solid var(--line);
+        background: #fff;
+        padding: 16px;
+        border-radius: 6px;
+      }
+      .metric {
+        font-size: 28px;
+        font-weight: 800;
+      }
+      .banner {
+        border-radius: 6px;
+        padding: 12px 16px;
+        margin: 0 0 16px 0;
+        font-weight: 700;
+        border: 1px solid var(--line);
+        background: var(--surface);
+      }
+      .banner.warn { background: #fff3df; border-color: #f0c98a; color: var(--warn); }
+      .banner.good { background: #e6f5ee; border-color: #a4d8bb; color: var(--good); }
+      .grid-cards {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin: 14px 0 6px 0;
+      }
+      @media (max-width: 820px) {
+        .grid-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 820px) {
+        .topbar, .actions { align-items: flex-start; flex-direction: column; }
+        nav a { margin: 0 16px 0 0; }
+        .form-grid { grid-template-columns: 1fr; }
+        .wide { grid-column: auto; }
+        table { font-size: 14px; }
+        th, td { padding: 10px 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap topbar">
+        <div>
+          <h1>HYDRA Console</h1>
+          <div class="muted">SIGNAL opportunity intelligence + Zone B product factory</div>
+        </div>
+        <nav>
+          <a href="/launch">Launch</a>
+          <a href="/opportunities">Opportunities</a>
+          <a href="/products">Products</a>
+          <a href="/revenue">Revenue</a>
+          <a href="/settings">Settings</a>
+        </nav>
+      </div>
+    </header>
+    <main class="wrap">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

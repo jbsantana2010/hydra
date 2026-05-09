@@ -1,0 +1,2 @@
+{"timestamp":"2026-05-08T00:00:00Z","event_type":"ledger_created","payload":{"note":"Runtime JSONL ledger initialized. Append one JSON object per line."}}
+{"event_type": "continuity_helper_smoke", "payload": {"result": "pass"}, "timestamp": "2026-05-09T00:01:55.795651+00:00"}

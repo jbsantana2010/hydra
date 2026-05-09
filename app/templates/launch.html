@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Launch Checklist</h2>
+  <p class="muted">One page to see if HYDRA is launch-ready right now.</p>
+
+  {% if kill_switch_active %}
+    <div class="banner warn">
+      Kill switch is ENABLED. Collectors and artifact export will refuse to act.
+      Disable in <a href="/settings">Settings</a> when ready.
+    </div>
+  {% else %}
+    <div class="banner good">Kill switch is disabled. Zone B safe-actions are unblocked.</div>
+  {% endif %}
+
+  <div class="grid-cards">
+    <section class="panel">
+      <div class="muted">Approved opportunities</div>
+      <div class="metric">{{ approved_count }}</div>
+    </section>
+    <section class="panel">
+      <div class="muted">Products total</div>
+      <div class="metric">{{ products_count }}</div>
+    </section>
+    <section class="panel">
+      <div class="muted">Live products</div>
+      <div class="metric">{{ live_count }}</div>
+    </section>
+    <section class="panel">
+      <div class="muted">Manual revenue</div>
+      <div class="metric">${{ "%.2f"|format(total_revenue) }}</div>
+    </section>
+  </div>
+
+  <div class="grid-cards">
+    <section class="panel">
+      <div class="muted">Daily budget (USD)</div>
+      <div class="metric">${{ "%.2f"|format(daily_budget) }}</div>
+    </section>
+    <section class="panel">
+      <div class="muted">Missing Gumroad URL</div>
+      <div class="metric">{{ missing_url_count }}</div>
+    </section>
+    <section class="panel">
+      <div class="muted">Top opportunities</div>
+      <div class="metric">{{ top_opportunities|length }}</div>
+    </section>
+    <section class="panel">
+      <div class="muted">Latest products</div>
+      <div class="metric">{{ latest_products|length }}</div>
+    </section>
+  </div>
+
+  {% if missing_url_products %}
+    <h3 style="margin-top: 24px;">Live/listed products missing a Gumroad URL</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for product in missing_url_products %}
+          <tr>
+            <td>{{ product.id }}</td>
+            <td><strong>{{ product.title }}</strong></td>
+            <td><span class="status paused">{{ product.status }}</span></td>
+            <td><a href="/products/{{ product.id }}/edit">Fix</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h3 style="margin-top: 24px;">Top 5 opportunities by score</h3>
+  {% if top_opportunities %}
+    <table>
+      <thead>
+        <tr>
+          <th>Score</th>
+          <th>Topic</th>
+          <th>Source</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for candidate in top_opportunities %}
+          <tr>
+            <td class="score">{{ "%.2f"|format(candidate.score) }}</td>
+            <td>
+              <strong>{{ candidate.topic }}</strong><br>
+              <span class="muted">{{ candidate.vertical }}</span>
+            </td>
+            <td>{{ candidate.source }}</td>
+            <td><span class="status {{ candidate.status }}">{{ candidate.status }}</span></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No candidates yet. Run the mock SIGNAL scan or HN collector on the Opportunities page.</p>
+  {% endif %}
+
+  <h3 style="margin-top: 24px;">Latest 5 products</h3>
+  {% if latest_products %}
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Price</th>
+          <th>Gumroad URL</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for product in latest_products %}
+          <tr>
+            <td>{{ product.id }}</td>
+            <td><strong>{{ product.title }}</strong></td>
+            <td><span class="status {{ product.status }}">{{ product.status }}</span></td>
+            <td>${{ "%.2f"|format(product.price) }}</td>
+            <td>
+              {% if product.gumroad_url %}
+                <a href="{{ product.gumroad_url }}">{{ product.gumroad_url }}</a>
+              {% else %}
+                <span class="muted">none</span>
+              {% endif %}
+            </td>
+            <td><a href="/products/{{ product.id }}/edit">Edit</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No products yet. Approve an opportunity to auto-create a draft product.</p>
+  {% endif %}
+{% endblock %}

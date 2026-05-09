@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Add Product File</h2>
+  <p class="muted">Track local package paths (ZIP, PDF, Markdown) for {{ product.title }}. This does not upload anything.</p>
+
+  <form class="form-grid" method="post" action="/products/{{ product.id }}/files">
+    <label>
+      Label
+      <input name="file_label" required placeholder="e.g. main_zip, cover_png, pdf_v2">
+    </label>
+    <label>
+      Type
+      <input name="file_type" value="manual" placeholder="manual, zip, pdf, image">
+    </label>
+    <label class="wide">
+      File path
+      <input name="file_path" required placeholder="products/my-product/my-product.zip">
+    </label>
+    <label class="wide">
+      Notes
+      <textarea name="notes" rows="3" placeholder="Where it lives, version, anything operator should know"></textarea>
+    </label>
+    <button type="submit">Save File Record</button>
+    <a class="button secondary" href="/products/{{ product.id }}/edit">Cancel</a>
+  </form>
+{% endblock %}

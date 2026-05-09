@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h2>Opportunity Candidates</h2>
+
+  {% if kill_switch_active %}
+    <div class="banner warn">
+      Kill switch is ENABLED. The HackerNews collector and artifact export are blocked.
+      Disable in <a href="/settings">Settings</a> when ready to resume.
+    </div>
+  {% endif %}
+
+  <div class="actions">
+    <form method="post" action="/opportunities/mock-scan">
+      <button type="submit">Run Mock SIGNAL Scan</button>
+    </form>
+    <form method="post" action="/opportunities/collect/hn">
+      <input type="hidden" name="query" value="AI">
+      <button class="secondary" type="submit">Collect HackerNews AI Signals</button>
+    </form>
+    <a class="button" href="/products">Create Product</a>
+  </div>
+
+  <p class="muted">
+    Approving an opportunity auto-creates a draft product with prefilled title, format, price, and notes — operator edits before generation.
+  </p>
+
+  {% if candidates %}
+    <table>
+      <thead>
+        <tr>
+          <th>Score</th>
+          <th>Topic</th>
+          <th>Source</th>
+          <th>Format</th>
+          <th>Status</th>
+          <th>Evidence</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for candidate in candidates %}
+          <tr>
+            <td class="score">{{ "%.2f"|format(candidate.score) }}</td>
+            <td>
+              <strong>{{ candidate.topic }}</strong><br>
+              <span class="muted">{{ candidate.vertical }}</span>
+            </td>
+            <td>{{ candidate.source }}</td>
+            <td>{{ candidate.production_format }}</td>
+            <td><span class="status {{ candidate.status }}">{{ candidate.status }}</span></td>
+            <td>{{ candidate.evidence }}</td>
+            <td>
+              {% if candidate.status != "approved" %}
+                <form method="post" action="/opportunities/{{ candidate.id }}/approve">
+                  <button class="secondary" type="submit">Approve</button>
+                </form>
+              {% else %}
+                <a href="/products">Product</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No candidates yet. Run the mock scan to seed Sprint 1 opportunities.</p>
+  {% endif %}
+
+  {% if product_prompt %}
+    <h3 style="margin-top: 28px;">Ruflo Product Prompt</h3>
+    <pre>{{ product_prompt }}</pre>
+  {% endif %}
+{% endblock %}
