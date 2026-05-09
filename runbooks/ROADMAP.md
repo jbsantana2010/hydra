@@ -428,6 +428,51 @@ Already shipped: file tracking, artifact export, Gumroad URL warnings, launch da
 - **Rollback:** disable the routes; Gumroad/Etsy unaffected.
 - **Executor:** Claude-required + Human (Stripe account, taxes).
 
+---
+
+### Sprint 7.5 — Print-on-Demand (POD) modality
+
+- **Objective:** Add physical product revenue with zero inventory via Printify/Printful/Gelato API.
+- **Why it fits HYDRA:** Designs are generatable (PNG/SVG via image gen). Fulfillment is fully automated. Etsy is already the primary POD storefront — no new marketplace onboarding. The operator's job remains approval-only.
+- **Features:**
+  - `ProductionFormat` type: `pod_design` — triggers a different generation pipeline (image prompt → PNG asset → product mockup).
+  - Printify API adapter in Zone B: create product draft, upload design, set variants, get preview URL. Credentials stay in Zone B env vars, never in Zone A.
+  - New `listings` platform values: `printify`, `printful`, `gelato`.
+  - Operator approval gate: approve design + price before any publish call fires.
+  - Revenue events tagged `marketplace=printify` etc. for attribution.
+- **Dependencies:** 4.0 (Gumroad draft pattern), 7.0 (Etsy account live), image generation capability (see Sprint 8.0).
+- **Risks:** Design quality. AI-generated designs need human review — the approval gate handles this. Printify TOS: no copyright infringement. Mitigation: no text reproducing brand names, no licensed characters.
+- **Complexity:** L (API integration) + image gen pipeline (M).
+- **Duration:** 3 days.
+- **Tests:** Printify sandbox draft creation, mockup URL returned, listing row created.
+- **Launch impact:** High — opens physical product revenue with zero warehouse overhead.
+- **Rollback:** Disable the `pod_design` pipeline flag; existing digital products unaffected.
+- **Executor:** Claude-required + Human (Printify account, first design approval).
+
+---
+
+### Sprint 8.0 — Revenue modality expansion (research + signal broadening)
+
+- **Objective:** Systematically evaluate every legal automated-income modality and route qualifying signals into the right pipeline.
+- **Why now:** Once digital downloads + POD are running, the highest-leverage next move is signal quality and modality fit — not more features.
+- **Modalities to evaluate and route:**
+
+  | Modality | Fit | Automation potential | Notes |
+  |---|---|---|---|
+  | Digital downloads (PDF, prompt pack, template) | ✓ Live | Full | Current primary |
+  | Print-on-demand (apparel, prints, mugs) | ✓ Sprint 7.5 | Full | Printify/Printful |
+  | Notion/Airtable templates | ✓ Live via Gumroad | Full | Already in prompt |
+  | Stock assets (icons, illustrations, SVGs) | High | High | Creative Market, Envato |
+  | Micro-SaaS tools (hosted utilities) | Medium | Medium | Requires infra + support |
+  | Newsletter sponsorship (owned audience) | Medium | Low | Human relationship required |
+  | Local business site template packs | High | High | "5-page plumber site + copy" sells on Gumroad/Etsy |
+  | Course / video product | Low | Low | Too much human content required |
+  | Affiliate content sites | Low | Low | SEO lag + Google risk |
+
+- **Deliverable:** Updated `SIGNAL_DESIGN.md` with modality-aware scoring — candidates are routed to the right pipeline by production format, not just scored generically.
+- **Dependencies:** 7.5 live, signal pipeline stable (Sprint 1.7+).
+- **Complexity:** M (research + scoring update) — no new infrastructure.
+- **Executor:** Claude-required (research + design). Human reviews modality rankings and approves additions.
 
 ---
 
@@ -436,11 +481,21 @@ Already shipped: file tracking, artifact export, Gumroad URL warnings, launch da
 The minimum sprints required for `detect → generate → launch → track → learn`:
 
 ```
-1.3 (LLM client + budget)  →  3.0 (Ruflo runner)  →  3.1 (QA gate)  →  3.2 (Packager)
-   →  4.0 (Gumroad draft)  →  4.2 (Sale attribution)  →  5.0 (Feedback loop)
+1.4 (controlled LLM execution)  →  1.5 (in-process generation, multi-marketplace copy)
+   →  1.6 (Alembic + listings table)  →  1.7 (Reddit + Celery scheduler)
+   →  4.0 (Gumroad API draft)  →  4.2 (sale attribution)  →  5.0 (feedback loop)
 ```
 
-That is **seven sprints**. Everything else is helpful but not blocking.
+That is **seven sprints** — same count, updated path. **Sprints 1.4–1.6 supersede the original 3.0/3.1/3.2** (Ruflo runner, QA gate, packager): the in-process agentic generation pipeline in Sprint 1.5 delivers equivalent capability without the Ruflo subprocess dependency. Sprints 3.0–3.2 are retained in the roadmap as optional Ruflo integration if the in-process pipeline proves insufficient for complex formats.
+
+**Operator-minimal-touch target:** By Sprint 4.2, the operator's only required actions are:
+1. Approve or reject a surfaced opportunity (10-second read of the pre-scored candidate)
+2. Optionally add feedback notes before generation runs
+3. Approve the final product for publish (review generated content + listing copy)
+
+Everything else — signal collection, scoring, generation, listing copy, QA, distribution drafting, revenue tracking — runs without operator input.
+
+Everything else is helpful but not blocking.
 
 ### Important but NOT blocking the first real loop
 
