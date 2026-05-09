@@ -17,6 +17,7 @@ from sqlalchemy import desc, func, select
 
 from db import (
     Approval,
+    Listing,
     LlmCall,
     OpportunityCandidate,
     Product,
@@ -205,6 +206,11 @@ def edit_product(request: Request, product_id: int):
             step: _latest_artifact(session, product_id, step)
             for step in generation_steps
         }
+        listings = session.scalars(
+            select(Listing)
+            .where(Listing.product_id == product_id)
+            .order_by(Listing.platform)
+        ).all()
         return templates.TemplateResponse(
             "product_edit.html",
             {
@@ -215,6 +221,7 @@ def edit_product(request: Request, product_id: int):
                 "statuses": PRODUCT_STATUSES,
                 "url_check": url_check,
                 "generation_status": generation_status,
+                "listings": listings,
             },
         )
 

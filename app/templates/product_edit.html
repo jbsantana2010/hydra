@@ -140,6 +140,60 @@
 
   </div>
 
+  {# ── Sprint 1.6: Multi-Platform Listings Tracker ── #}
+  <h3>Listings</h3>
+  <p class="muted" style="margin-bottom:10px;">
+    Tracks draft/live state per marketplace. Sprint 4.0 will add one-click publish automation.
+  </p>
+  {% if listings %}
+    <table>
+      <thead>
+        <tr>
+          <th>Platform</th>
+          <th>Status</th>
+          <th>External ID</th>
+          <th>Draft URL</th>
+          <th>Live URL</th>
+          <th>Price</th>
+          <th>Notes</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for listing in listings %}
+          <tr>
+            <td><strong>{{ listing.platform }}</strong></td>
+            <td>
+              <span class="badge {% if listing.status == 'live' %}good{% elif listing.status == 'draft' %}warn{% else %}muted{% endif %}">
+                {{ listing.status }}
+              </span>
+            </td>
+            <td>{{ listing.external_id or '—' }}</td>
+            <td>
+              {% if listing.draft_url %}
+                <a href="{{ listing.draft_url }}" target="_blank">draft ↗</a>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if listing.live_url %}
+                <a href="{{ listing.live_url }}" target="_blank">live ↗</a>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if listing.price_cents %}
+                {{ listing.currency }} {{ "%.2f"|format(listing.price_cents / 100) }}
+              {% else %}—{% endif %}
+            </td>
+            <td>{{ listing.notes or '' }}</td>
+            <td class="muted">{{ listing.updated_at or listing.created_at }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No listings yet. Listings are created automatically when listing copy is published to a marketplace. Sprint 4.0 will add API-driven publish.</p>
+  {% endif %}
+
   <h3>Files</h3>
   {% if files %}
     <table>

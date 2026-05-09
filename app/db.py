@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
 from sqlalchemy import (
     Column,
     DateTime,
@@ -139,8 +141,58 @@ class LlmCall(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class Listing(Base):
+    """Multi-platform listing tracker. Sprint 4.0 will add API publish automation."""
+
+    __tablename__ = "listings"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(
+        Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    # gumroad | etsy | sellfy | payhip | creative_market
+    platform = Column(Text, nullable=False)
+    # draft | live | paused | archived
+    status = Column(Text, default="draft")
+    external_id = Column(Text)     # marketplace-assigned ID once published
+    draft_url = Column(Text)
+    live_url = Column(Text)
+    price_cents = Column(Integer)
+    currency = Column(Text, default="USD")
+    notes = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
+    """Initialize the database via Alembic migrations.
+
+    Three cases handled safely:
+      1. Fresh DB (no tables)          → run all migrations from scratch
+      2. Pre-Alembic DB (has tables,   → stamp head so Alembic won't re-create
+         no alembic_version)
+      3. Already-managed DB            → upgrade to latest head
+    """
+    from alembic.config import Config
+    from alembic import command
+    from sqlalchemy import inspect, text
+
+    alembic_cfg = Config(os.path.join(_APP_DIR, "alembic.ini"))
+
+    with engine.connect() as conn:
+        insp = inspect(conn)
+        existing_tables = set(insp.get_table_names())
+        has_alembic = "alembic_version" in existing_tables
+        has_our_tables = "opportunity_candidates" in existing_tables
+
+    if has_our_tables and not has_alembic:
+        # Pre-Alembic database: tables exist but Alembic hasn't touched them.
+        # Stamp to head so future upgrades run from current state.
+        command.stamp(alembic_cfg, "head")
+    else:
+        # Fresh DB (runs all migrations) or already-managed (upgrades to head).
+        command.upgrade(alembic_cfg, "head")
+
     _apply_one_shot_migrations()
     seed_system_flags()
 
