@@ -29,34 +29,49 @@
     <table>
       <thead>
         <tr>
+          <th>Created</th>
           <th>Score</th>
           <th>Topic</th>
           <th>Source</th>
           <th>Format</th>
           <th>Status</th>
-          <th>Evidence</th>
           <th>Action</th>
         </tr>
       </thead>
       <tbody>
         {% for candidate in candidates %}
           <tr>
-            <td class="score">{{ "%.2f"|format(candidate.score) }}</td>
+            <td style="white-space:nowrap;font-size:0.85em" class="muted">
+              {% if candidate.created_at %}
+                {{ candidate.created_at.strftime('%Y-%m-%d') }}<br>
+                <span style="font-size:0.9em">{{ candidate.created_at.strftime('%H:%M') }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="score">{{ "%.1f"|format(candidate.score) }}</td>
             <td>
-              <strong>{{ candidate.topic }}</strong><br>
+              <strong>{{ candidate.topic[:80] }}{% if candidate.topic|length > 80 %}…{% endif %}</strong><br>
               <span class="muted">{{ candidate.vertical }}</span>
             </td>
-            <td>{{ candidate.source }}</td>
+            <td>
+              {% if candidate.source == "HackerNews" %}
+                <span style="background:#ff6600;color:#fff;padding:2px 6px;border-radius:3px;font-size:0.8em;font-weight:bold;">HN</span>
+              {% elif candidate.source == "Reddit" %}
+                <span style="background:#ff4500;color:#fff;padding:2px 6px;border-radius:3px;font-size:0.8em;font-weight:bold;">Reddit</span>
+              {% elif candidate.source == "mock" or candidate.source == "Mock" %}
+                <span style="background:#aaa;color:#fff;padding:2px 6px;border-radius:3px;font-size:0.8em;">Mock</span>
+              {% else %}
+                <span style="background:#555;color:#fff;padding:2px 6px;border-radius:3px;font-size:0.8em;">{{ candidate.source }}</span>
+              {% endif %}
+            </td>
             <td>{{ candidate.production_format }}</td>
             <td><span class="status {{ candidate.status }}">{{ candidate.status }}</span></td>
-            <td>{{ candidate.evidence }}</td>
             <td>
               {% if candidate.status != "approved" %}
                 <form method="post" action="/opportunities/{{ candidate.id }}/approve">
-                  <button class="secondary" type="submit">Approve</button>
+                  <button class="secondary" type="submit">Approve →</button>
                 </form>
               {% else %}
-                <a href="/products">Product</a>
+                <a href="/products">View Product</a>
               {% endif %}
             </td>
           </tr>

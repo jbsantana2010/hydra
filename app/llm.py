@@ -132,6 +132,7 @@ def call_llm_json(
                     duration_ms=int((time.monotonic() - started) * 1000),
                     status="failed",
                     error=str(exc)[:1000],
+                    error_type=_classify_error(exc),
                 )
 
         raise LlmFailed("; ".join(errors) or "LLM providers failed")
@@ -290,7 +291,73 @@ def _estimate_cost(provider: str, prompt_tokens: int, completion_tokens: int) ->
     ).quantize(Decimal("0.000001"))
 
 
+def _classify_error(exc: Exception) -> str:
+    """Return a short error type label for operator visibility.
+
+    Labels:
+      auth_error     — bad API key, 401
+      quota_error    — rate limit or billing, 429
+      bad_request    — bad model name or invalid params, 400
+      provider_5xx   — provider server error, 5xx
+      timeout        — request timed out
+      bad_json       — response not valid JSON or not an object
+      kill_switch    — hydra:kill flag active
+      budget_exceeded— daily or per-call budget exceeded
+      missing_key    — no API key configured
+      unknown        — anything else
+    """
+    msg = str(exc).lower()
+    # httpx HTTP status errors — check status code first
+    if hasattr(exc, "response"):
+        status = getattr(exc.response, "status_code", 0)
+        if status == 401:
+            return "auth_error"
+        if status == 429:
+            return "quota_error"
+        if status == 400:
+            return "bad_request"
+        if 500 <= status < 600:
+            return "provider_5xx"
+    # Exception type checks
+    if isinstance(exc, (json.JSONDecodeError, ValueError)) and (
+        "json" in msg or "not an object" in msg or "valid" in msg
+    ):
+        return "bad_json"
+    if "timeout" in msg or "timed out" in type(exc).__name__.lower():
+        return "timeout"
+    # String pattern checks for wrapped/re-raised messages
+    if any(w in msg for w in ("401", "authentication", "auth", "api key", "invalid_api_key", "x-api-key")):
+        return "auth_error"
+    if any(w in msg for w in ("429", "rate_limit", "rate limit", "quota", "billing", "insufficient")):
+        return "quota_error"
+    if any(w in msg for w in ("400", "bad request", "invalid model", "model not found")):
+        return "bad_request"
+    if any(w in msg for w in ("500", "502", "503", "504", "server error", "provider")):
+        return "provider_5xx"
+    if "timeout" in msg:
+        return "timeout"
+    if any(w in msg for w in ("json", "not an object", "decode")):
+        return "bad_json"
+    if "kill switch" in msg:
+        return "kill_switch"
+    if any(w in msg for w in ("budget", "cap exceeded", "budget exceeded")):
+        return "budget_exceeded"
+    if any(w in msg for w in ("no llm api key", "no api key", "missing key")):
+        return "missing_key"
+    return "unknown"
+
+
 def _log_blocked(db, purpose: str, prompt_tokens: int, status: str, started: float, exc: Exception) -> None:
+    # Determine specific blocked type
+    msg = str(exc).lower()
+    if "kill switch" in msg:
+        error_type = "kill_switch"
+    elif "budget" in msg or "cap" in msg:
+        error_type = "budget_exceeded"
+    elif "no llm api key" in msg or "no api key" in msg:
+        error_type = "missing_key"
+    else:
+        error_type = "blocked"
     _log_call(
         db,
         provider=None,
@@ -302,6 +369,7 @@ def _log_blocked(db, purpose: str, prompt_tokens: int, status: str, started: flo
         duration_ms=int((time.monotonic() - started) * 1000),
         status=status,
         error=str(exc)[:1000],
+        error_type=error_type,
     )
 
 
@@ -316,6 +384,7 @@ def _log_call(
     duration_ms: int,
     status: str,
     error: str | None,
+    error_type: str | None = None,
 ) -> None:
     db.add(
         LlmCall(
@@ -328,6 +397,7 @@ def _log_call(
             duration_ms=duration_ms,
             status=status,
             error=error,
+            error_type=error_type,
         )
     )
     db.flush()

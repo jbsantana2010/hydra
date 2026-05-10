@@ -3,6 +3,14 @@
 {% block content %}
   <h2>Edit Product</h2>
 
+  {# ── Sprint 1.5.1: Flash banner — generation result ── #}
+  {% if flash_banner %}
+    <div class="banner {% if flash_banner.level == 'success' %}good{% elif flash_banner.level == 'error' %}warn{% else %}warn{% endif %}"
+         style="margin-bottom:12px;{% if flash_banner.level == 'error' %}background:#fff0f0;border-color:#e00;{% elif flash_banner.level == 'success' %}background:#f0fff4;border-color:#0a0;{% endif %}">
+      {{ flash_banner.message }}
+    </div>
+  {% endif %}
+
   {% if url_check %}
     <div class="banner {% if url_check.level == 'good' %}good{% else %}warn{% endif %}">
       {{ url_check.message }}
@@ -49,6 +57,51 @@
     </form>
     <span class="muted">Writes one Markdown file per artifact under exports/product_{{ product.id }}/</span>
   </div>
+
+  {# ── Sprint 1.5.1: Latest LLM Activity (last 5 calls) ── #}
+  {% if recent_llm_calls %}
+    <details style="margin-bottom:16px;">
+      <summary style="cursor:pointer;font-weight:600;padding:6px 0;">
+        Latest LLM Activity
+        {% set last = recent_llm_calls[0] %}
+        — <span class="status {% if last.status == 'success' %}live{% else %}paused{% endif %}" style="font-size:0.85em">{{ last.status }}</span>
+        {% if last.provider %}<span class="muted" style="font-weight:normal;font-size:0.85em"> · {{ last.provider }}{% if last.model %} ({{ last.model }}){% endif %}</span>{% endif %}
+        {% if last.cost_usd and last.cost_usd > 0 %}<span class="muted" style="font-weight:normal;font-size:0.85em"> · ${{ "%.6f"|format(last.cost_usd) }}</span>{% endif %}
+      </summary>
+      <table style="margin-top:8px;font-size:0.85em;">
+        <thead>
+          <tr>
+            <th>Purpose</th>
+            <th>Provider</th>
+            <th>Status</th>
+            <th>Error Type</th>
+            <th>Cost</th>
+            <th>Ms</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for call in recent_llm_calls %}
+            <tr {% if call.status == 'failed' %}style="background:#fff3f3"{% elif call.status in ('blocked','kill_switch') %}style="background:#fffbea"{% endif %}>
+              <td>{{ call.purpose }}</td>
+              <td>{{ call.provider or "—" }}</td>
+              <td><span class="status {% if call.status == 'success' %}live{% else %}paused{% endif %}">{{ call.status }}</span></td>
+              <td>{% if call.error_type %}<code style="font-size:0.82em">{{ call.error_type }}</code>{% else %}—{% endif %}</td>
+              <td>${{ "%.6f"|format(call.cost_usd) }}</td>
+              <td>{{ call.duration_ms or "—" }}</td>
+              <td style="max-width:200px;word-break:break-word;">
+                {% if call.error %}
+                  <span title="{{ call.error }}" style="cursor:help;color:#900;">
+                    {{ call.error[:60] }}{% if call.error|length > 60 %}…{% endif %}
+                  </span>
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  {% endif %}
 
   {# ── Sprint 1.5: Agentic Generation Pipeline (Gumroad · Etsy · Sellfy · Payhip) ── #}
   <h3>Generate</h3>

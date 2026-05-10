@@ -138,6 +138,8 @@ class LlmCall(Base):
     duration_ms = Column(Integer)
     status = Column(Text)
     error = Column(Text)
+    # Sprint 1.5.1 — structured error classification for operator visibility
+    error_type = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -187,8 +189,11 @@ def init_db() -> None:
 
     if has_our_tables and not has_alembic:
         # Pre-Alembic database: tables exist but Alembic hasn't touched them.
-        # Stamp to head so future upgrades run from current state.
-        command.stamp(alembic_cfg, "head")
+        # Stamp at 0001 (baseline) so Alembic knows the original schema already
+        # exists, then upgrade to head so NEW migrations (0002+) actually run.
+        # Stamping at "head" would skip all migrations including new ones — wrong.
+        command.stamp(alembic_cfg, "0001")
+        command.upgrade(alembic_cfg, "head")
     else:
         # Fresh DB (runs all migrations) or already-managed (upgrades to head).
         command.upgrade(alembic_cfg, "head")
@@ -213,6 +218,25 @@ def _apply_one_shot_migrations() -> None:
         "ALTER TABLE product_artifacts ADD COLUMN IF NOT EXISTS published_url TEXT",
         "ALTER TABLE product_artifacts ADD COLUMN IF NOT EXISTS published_at TIMESTAMP",
         "ALTER TABLE product_artifacts ADD COLUMN IF NOT EXISTS channel_tag TEXT",
+        # Sprint 1.5.1 — structured error type for LLM call visibility
+        "ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS error_type TEXT",
+        # Sprint 1.6 — listings table safety net (catches DBs stamped at 0002
+        # before migration 0002 actually ran, e.g. pre-Alembic stamp-to-head path)
+        """CREATE TABLE IF NOT EXISTS listings (
+            id          SERIAL PRIMARY KEY,
+            product_id  INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            platform    TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'draft',
+            external_id TEXT,
+            draft_url   TEXT,
+            live_url    TEXT,
+            price_cents INTEGER,
+            currency    TEXT DEFAULT 'USD',
+            notes       TEXT,
+            created_at  TIMESTAMP DEFAULT now(),
+            updated_at  TIMESTAMP DEFAULT now()
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_listings_product_platform ON listings (product_id, platform)",
     ]
     with engine.begin() as conn:
         for stmt in statements:

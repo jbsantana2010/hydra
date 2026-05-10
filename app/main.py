@@ -185,7 +185,16 @@ def products(request: Request):
 
 
 @app.get("/products/{product_id}/edit")
-def edit_product(request: Request, product_id: int):
+def edit_product(
+    request: Request,
+    product_id: int,
+    flash: str = "",
+    step: str = "",
+    msg: str = "",
+    provider: str = "",
+    model: str = "",
+    cost: str = "",
+):
     with session_scope() as session:
         product = session.get(Product, product_id)
         if not product:
@@ -203,14 +212,34 @@ def edit_product(request: Request, product_id: int):
         url_check = check_gumroad_url(product)
         generation_steps = ("outline", "product_content", "listing_copy", "qa_review", "distribution_post")
         generation_status = {
-            step: _latest_artifact(session, product_id, step)
-            for step in generation_steps
+            step_name: _latest_artifact(session, product_id, step_name)
+            for step_name in generation_steps
         }
         listings = session.scalars(
             select(Listing)
             .where(Listing.product_id == product_id)
             .order_by(Listing.platform)
         ).all()
+        # Recent LLM calls (last 5) for "Latest Action" section — single-operator
+        # system so these will almost always belong to this product's last generation.
+        recent_llm_calls = session.scalars(
+            select(LlmCall).order_by(desc(LlmCall.created_at)).limit(5)
+        ).all()
+        # Build flash banner context
+        flash_banner = None
+        if flash == "success":
+            parts = [f"✓ Generated {step} successfully."]
+            if provider:
+                parts.append(f"Provider: {provider}")
+                if model:
+                    parts.append(f"({model})")
+            if cost:
+                parts.append(f"Cost: ${cost}")
+            flash_banner = {"level": "success", "message": " ".join(parts)}
+        elif flash == "error":
+            flash_banner = {"level": "error", "message": f"✗ {msg or 'Generation failed.'}"}
+        elif flash == "blocked":
+            flash_banner = {"level": "warn", "message": f"⊘ {msg or 'Action blocked.'}"}
         return templates.TemplateResponse(
             "product_edit.html",
             {
@@ -222,6 +251,8 @@ def edit_product(request: Request, product_id: int):
                 "url_check": url_check,
                 "generation_status": generation_status,
                 "listings": listings,
+                "recent_llm_calls": recent_llm_calls,
+                "flash_banner": flash_banner,
             },
         )
 
@@ -379,7 +410,7 @@ def create_revenue_event(
 def settings(request: Request):
     with session_scope() as session:
         recent_llm_calls = session.scalars(
-            select(LlmCall).order_by(desc(LlmCall.created_at)).limit(8)
+            select(LlmCall).order_by(desc(LlmCall.created_at)).limit(15)
         ).all()
         today_llm_spend = get_today_llm_spend(session)
         return templates.TemplateResponse(
@@ -1085,7 +1116,38 @@ def _latest_artifact(session, product_id: int, artifact_type: str):
     )
 
 
+def _generation_redirect(product_id: int, flash: str, step: str, msg: str = "",
+                          provider: str = "", model: str = "", cost: str = "") -> RedirectResponse:
+    """Build a flash-param redirect back to the product edit page."""
+    from urllib.parse import urlencode
+    params = {"flash": flash, "step": step}
+    if msg:
+        params["msg"] = msg
+    if provider:
+        params["provider"] = provider
+    if model:
+        params["model"] = model
+    if cost:
+        params["cost"] = cost
+    return RedirectResponse(
+        url=f"/products/{product_id}/edit?{urlencode(params)}", status_code=303
+    )
+
+
+def _last_llm_call_meta(session) -> dict:
+    """Return provider/model/cost from the most recent LlmCall row."""
+    call = session.scalar(select(LlmCall).order_by(desc(LlmCall.created_at)))
+    if not call:
+        return {}
+    return {
+        "provider": call.provider or "",
+        "model": call.model or "",
+        "cost": f"{float(call.cost_usd):.6f}" if call.cost_usd else "0",
+    }
+
+
 def _generation_error(action: str, status: str, message: str) -> JSONResponse:
+    """Legacy JSON error — kept for API callers. UI routes use _generation_redirect() instead."""
     return JSONResponse({"status": status, "action": action, "message": message})
 
 
@@ -1150,9 +1212,12 @@ def generate_outline(product_id: int):
                 content=json.dumps(data, indent=2),
                 source="hydra-llm:outline",
             ))
-        except (LlmBlocked, LlmFailed) as exc:
-            return _generation_error("outline", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
-    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "outline", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "outline", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "outline", msg=str(exc)[:200])
 
 
 @app.post("/products/{product_id}/generate/content")
@@ -1163,7 +1228,7 @@ def generate_content(product_id: int):
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         if not _latest_artifact(session, product_id, "outline"):
-            return _generation_error("content", "missing_prereq", "Generate and review an Outline first.")
+            return _generation_redirect(product_id, "blocked", "product_content", msg="Complete step 1 (Outline) first.")
 
         outline = _artifact_context(session, product_id, "outline")
         sections = outline.get("deliverable_sections") or []
@@ -1200,9 +1265,12 @@ def generate_content(product_id: int):
                 content=json.dumps(data, indent=2),
                 source="hydra-llm:content",
             ))
-        except (LlmBlocked, LlmFailed) as exc:
-            return _generation_error("content", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
-    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "product_content", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "product_content", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "product_content", msg=str(exc)[:200])
 
 
 @app.post("/products/{product_id}/generate/listing")
@@ -1213,7 +1281,7 @@ def generate_listing(product_id: int):
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         if not _latest_artifact(session, product_id, "product_content"):
-            return _generation_error("listing", "missing_prereq", "Generate Content first.")
+            return _generation_redirect(product_id, "blocked", "listing_copy", msg="Complete step 2 (Product Content) first.")
 
         outline = _artifact_context(session, product_id, "outline")
         content_data = _artifact_context(session, product_id, "product_content")
@@ -1268,9 +1336,12 @@ def generate_listing(product_id: int):
                 content=json.dumps(data, indent=2),
                 source="hydra-llm:listing",
             ))
-        except (LlmBlocked, LlmFailed) as exc:
-            return _generation_error("listing", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
-    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "listing_copy", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "listing_copy", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "listing_copy", msg=str(exc)[:200])
 
 
 @app.post("/products/{product_id}/generate/qa")
@@ -1281,7 +1352,7 @@ def generate_qa(product_id: int):
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         if not _latest_artifact(session, product_id, "product_content"):
-            return _generation_error("qa", "missing_prereq", "Generate Content first.")
+            return _generation_redirect(product_id, "blocked", "qa_review", msg="Complete step 2 (Product Content) first.")
 
         content_data = _artifact_context(session, product_id, "product_content")
         listing_data = _artifact_context(session, product_id, "listing_copy")
@@ -1340,9 +1411,16 @@ def generate_qa(product_id: int):
                 content=json.dumps(data, indent=2),
                 source="hydra-llm:qa",
             ))
-        except (LlmBlocked, LlmFailed) as exc:
-            return _generation_error("qa", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
-    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(
+                product_id, "success", "qa_review",
+                msg=f"Score {score} — publishable: {publishable}",
+                **meta,
+            )
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "qa_review", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "qa_review", msg=str(exc)[:200])
 
 
 @app.post("/products/{product_id}/generate/distribution")
@@ -1353,7 +1431,7 @@ def generate_distribution(product_id: int):
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         if not _latest_artifact(session, product_id, "listing_copy"):
-            return _generation_error("distribution", "missing_prereq", "Generate Listing Copy first.")
+            return _generation_redirect(product_id, "blocked", "distribution_post", msg="Complete step 3 (Listing Copy) first.")
 
         outline = _artifact_context(session, product_id, "outline")
         listing_data = _artifact_context(session, product_id, "listing_copy")
@@ -1417,6 +1495,9 @@ def generate_distribution(product_id: int):
                 content=json.dumps(data, indent=2),
                 source="hydra-llm:distribution",
             ))
-        except (LlmBlocked, LlmFailed) as exc:
-            return _generation_error("distribution", "blocked" if isinstance(exc, LlmBlocked) else "failed", str(exc))
-    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "distribution_post", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "distribution_post", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "distribution_post", msg=str(exc)[:200])

@@ -40,27 +40,57 @@
 
   <section class="panel" style="margin-top: 18px;">
     <h3>Recent LLM Calls</h3>
+    <p class="muted" style="margin-bottom: 10px;">
+      Last 8 calls. Error type helps diagnose failures — hover error text for full detail.
+    </p>
     {% if recent_llm_calls %}
       <table>
         <thead>
           <tr>
-            <th>Provider</th>
-            <th>Model</th>
+            <th>Provider / Model</th>
             <th>Purpose</th>
             <th>Cost</th>
+            <th>Duration</th>
             <th>Status</th>
+            <th>Error Type</th>
+            <th>Error Detail</th>
             <th>Created</th>
           </tr>
         </thead>
         <tbody>
           {% for call in recent_llm_calls %}
-            <tr>
-              <td>{{ call.provider or "n/a" }}</td>
-              <td>{{ call.model or "n/a" }}</td>
+            <tr {% if call.status == "failed" %}style="background:#fff3f3"{% elif call.status == "blocked" or call.status == "kill_switch" %}style="background:#fffbea"{% endif %}>
+              <td>
+                <strong>{{ call.provider or "—" }}</strong>
+                {% if call.model %}<br><span class="muted" style="font-size:0.82em">{{ call.model }}</span>{% endif %}
+              </td>
               <td>{{ call.purpose }}</td>
               <td>${{ "%.6f"|format(call.cost_usd) }}</td>
-              <td><span class="status">{{ call.status }}</span></td>
-              <td>{{ call.created_at }}</td>
+              <td>{% if call.duration_ms %}{{ call.duration_ms }}ms{% else %}—{% endif %}</td>
+              <td>
+                <span class="status {% if call.status == 'success' %}live{% elif call.status == 'failed' %}paused{% else %}{{ call.status }}{% endif %}">
+                  {{ call.status }}
+                </span>
+              </td>
+              <td>
+                {% if call.error_type %}
+                  <code style="font-size:0.82em;background:#f0f0f0;padding:2px 5px;border-radius:3px;">
+                    {{ call.error_type }}
+                  </code>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+              <td style="max-width:260px;word-break:break-word;">
+                {% if call.error %}
+                  <span title="{{ call.error }}" style="cursor:help;font-size:0.82em;color:#b00;">
+                    {{ call.error[:80] }}{% if call.error|length > 80 %}… <em>(hover for full)</em>{% endif %}
+                  </span>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+              <td class="muted" style="white-space:nowrap;font-size:0.85em">{{ call.created_at }}</td>
             </tr>
           {% endfor %}
         </tbody>
