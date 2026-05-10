@@ -165,6 +165,25 @@ Already shipped: file tracking, artifact export, Gumroad URL warnings, launch da
 
 ---
 
+### Sprint 1.8 — Product Asset Generator v1
+
+- **Objective:** Convert generated product artifacts into real local product files and a marketplace-ready ZIP package.
+- **Status:** Complete 2026-05-10.
+- **Features:**
+  - `POST /products/{id}/package` builds a local package from `outline`, `product_content`, and `listing_copy`.
+  - Markdown source export under `products/product_<id>/source/`.
+  - Printable HTML generation under `products/product_<id>/printable/` for planner/printable/worksheet/tracker/checklist formats.
+  - `README.md`, `manifest.json`, and `marketplace_checklist.md`.
+  - ZIP package at `products/product_<id>.zip`.
+  - ZIP registration in `product_files`.
+  - Product edit page includes a Package Product section and package button.
+- **Dependencies:** Sprint 1.5 product generation artifacts; Sprint 1.6 product file tracking.
+- **Risks:** HTML is plain and PDF conversion remains manual. Mitigation: package checklist tells the operator what still needs review/mockups/PDF conversion.
+- **Acceptance criteria:** `bash scripts/verify_sprint18.sh` and `LIVE=1 bash scripts/verify_sprint18.sh` pass; product 43 packages successfully.
+- **Executor:** Codex-safe.
+
+---
+
 ### Sprint 2.1 — Reddit collector + scheduler
 
 - **Objective:** Two real sources running on a schedule produce the cross-source-confirmation signal that mock candidates fake.
@@ -1019,4 +1038,3 @@ loop with patterns grounded in observed buyer behavior, not forum discussion.
 - Background scheduling.
 
 #### Files expected to change
-

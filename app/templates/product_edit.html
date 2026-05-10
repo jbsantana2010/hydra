@@ -58,6 +58,25 @@
     <span class="muted">Writes one Markdown file per artifact under exports/product_{{ product.id }}/</span>
   </div>
 
+  {# Sprint 1.8: Local product asset package builder #}
+  <h3>Package Product</h3>
+  <section class="panel">
+    <p class="muted">
+      Builds Markdown sources, printable HTML when applicable, README, manifest, marketplace checklist, and a ZIP for manual marketplace upload.
+    </p>
+    <form method="post" action="/products/{{ product.id }}/package" style="margin:10px 0;">
+      <button type="submit">Build Product Package</button>
+    </form>
+    {% set package_files = files | selectattr("file_type", "equalto", "package_zip") | list %}
+    {% if package_files %}
+      {% set latest_package = package_files[0] %}
+      <p><strong>Latest package ZIP:</strong> <code>{{ latest_package.file_path }}</code></p>
+      <p class="muted">Created: {{ latest_package.created_at }}</p>
+    {% else %}
+      <p class="muted">No package ZIP has been registered yet.</p>
+    {% endif %}
+  </section>
+
   {# ── Sprint 1.5.1: Latest LLM Activity (last 5 calls) ── #}
   {% if recent_llm_calls %}
     <details style="margin-bottom:16px;">

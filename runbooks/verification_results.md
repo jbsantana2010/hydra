@@ -102,3 +102,22 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | Manual CSV import | PASS — 10 items imported from `scripts/sample_research.csv` |
 | Manual pattern extraction | PASS — 13 market patterns created |
 | Manual opportunity generation | PASS — 5 pending-review candidates created |
+
+---
+
+## Sprint 1.8 — 2026-05-10
+
+| Check | Result |
+|---|---|
+| `./scripts/preflight_check.sh` | PASS |
+| `bash scripts/verify_sprint17.sh` | PASS |
+| `LIVE=1 bash scripts/verify_sprint17.sh` | PASS |
+| `python3 -m py_compile app/main.py app/db.py app/llm.py` | PASS |
+| `bash scripts/verify_sprint18.sh` | PASS — 7/7 |
+| `LIVE=1 bash scripts/verify_sprint18.sh` | PASS — 17/17 |
+| Product 43 package route | PASS — 303 success redirect |
+| Product 43 ZIP | PASS — `products/product_43.zip` |
+| Product 43 printable HTML | PASS — generated under `products/product_43/printable/` |
+| Product 43 source Markdown | PASS — generated under `products/product_43/source/` |
+| Product 43 manifest/checklist/README | PASS |
+| Product 43 `product_files` package row | PASS |

@@ -100,6 +100,36 @@ Entry format:
 - Next:
   - Sprint 1.8 should focus on marketplace intelligence review UX and product packaging improvements, with no external scraping or marketplace automation.
 
+## 2026-05-10T22:10:34Z - Sprint 1.8 Closeout (Product Asset Generator v1)
+
+- Commit: `uncommitted at closeout`
+- Branch: `main`
+- Executor: Codex
+- Source of truth: `/home/jb/dev/hydra`
+- Summary:
+  - Added local product package builder route.
+  - Generated Markdown source files, printable HTML files, README, manifest, marketplace checklist, and ZIP packages.
+  - Registered generated ZIPs in `product_files`.
+  - Added Product Edit UI package button.
+  - Mounted `./products` into the app container at `/app/products`.
+- Verification:
+  - `./scripts/preflight_check.sh` — PASS.
+  - `bash scripts/verify_sprint17.sh` — PASS.
+  - `LIVE=1 bash scripts/verify_sprint17.sh` — PASS.
+  - `bash scripts/verify_sprint18.sh` — PASS, 7/7.
+  - `LIVE=1 bash scripts/verify_sprint18.sh` — PASS, 17/17.
+- Manual smoke:
+  - Product 43 package route returned a success redirect.
+  - `products/product_43.zip` exists.
+  - `products/product_43/source/*.md` exists.
+  - `products/product_43/printable/*.html` exists.
+  - `products/product_43/manifest.json`, `README.md`, and `marketplace_checklist.md` exist.
+  - Product 43 has a `product_files` row with `file_type='package_zip'`.
+- Known issues:
+  - See `runbooks/known_issues.md`.
+- Next:
+  - Improve product file quality with optional PDF conversion and better per-format printable templates.
+
 ## 2026-05-09T03:55:00Z - Sprint 1.4 Controlled LLM Execution Layer
 
 - Commit: `unknown`

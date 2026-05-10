@@ -11,6 +11,8 @@ Severities: `low` / `medium` / `high`.
 
 ---
 
+- 2026-05-10 [sprint 1.8] **low** — Generated package files in the host-mounted `products/` directory are owned by the container user. This mirrors existing export behavior. Mitigation: acceptable for local MVP; fix alongside a non-root container user later.
+- 2026-05-10 [sprint 1.8] **low** — Printable output is HTML only; PDF conversion remains manual through browser print/export. Mitigation: README and marketplace checklist explain manual PDF/mockup review requirements.
 - 2026-05-10 [sprint 1.7] **low** — Sprint 1.7 verification and manual smoke leave local research runs/items/patterns and pending-review market-intelligence opportunities in the development database. Mitigation: acceptable for local MVP testing; add cleanup mode to `scripts/verify_sprint17.sh` in a future hardening pass.
 - 2026-05-10 [sprint 1.7] **medium** — Anthropic primary LLM calls returned 404 in this environment during Sprint 1.7 smoke testing. OpenAI fallback successfully handled market pattern extraction after completion budget tuning. Mitigation: verify Anthropic model/key configuration before relying on primary provider.
 - 2026-05-10 [sprint 1.7] **medium** — `scripts/verify_sprint15.sh` still fails generation guard-path checks after Sprint 1.7. This was observed before the Sprint 1.7 merge and appears unrelated to marketplace intelligence. Mitigation: keep Sprint 1.7 accepted based on its own verifier and manual smoke; schedule Sprint 1.5 verifier repair or generation route audit separately.
