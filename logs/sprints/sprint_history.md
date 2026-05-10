@@ -72,6 +72,34 @@ Entry format:
 - Next:
   - Follow `runbooks/ROADMAP.md` immediate next sprint recommendation unless operator overrides.
 
+## 2026-05-10T20:59:49Z - Sprint 1.7 Closeout (Marketplace Intelligence v1)
+
+- Commit: `uncommitted at closeout`
+- Branch: `main`
+- Executor: Codex
+- Source of truth: `/home/jb/dev/hydra`
+- Summary:
+  - Merged Claude's Sprint 1.7 OneDrive work into WSL without overwriting the project.
+  - Added market research runs, items, patterns, CSV import, guarded LLM pattern extraction, and opportunity generation.
+  - Preserved Zone B ownership and did not add scraping, marketplace APIs, auto-publishing, credentials, or autonomous behavior.
+- Verification:
+  - `python3 -m py_compile app/main.py app/db.py app/llm.py` — PASS.
+  - `docker compose run --rm --no-deps hydra-console python -m py_compile /app/main.py /app/db.py /app/llm.py` — PASS.
+  - `docker compose run --rm hydra-console alembic current -v` — PASS, `0003 (head)`.
+  - `./scripts/preflight_check.sh` — PASS.
+  - `bash scripts/verify_sprint17.sh` — PASS, 30/30.
+  - `LIVE=1 bash scripts/verify_sprint17.sh` — PASS, 38/38.
+  - `bash scripts/verify_sprint16.sh` — PASS.
+  - `bash scripts/verify_sprint15.sh` — FAIL on preexisting generation guard-path checks.
+- Manual smoke:
+  - CSV import created 10 items.
+  - Analyze created 13 market patterns.
+  - Generate opportunities created 5 pending-review opportunity candidates.
+- Known issues:
+  - See `runbooks/known_issues.md`.
+- Next:
+  - Sprint 1.8 should focus on marketplace intelligence review UX and product packaging improvements, with no external scraping or marketplace automation.
+
 ## 2026-05-09T03:55:00Z - Sprint 1.4 Controlled LLM Execution Layer
 
 - Commit: `unknown`

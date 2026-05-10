@@ -11,6 +11,9 @@ Severities: `low` / `medium` / `high`.
 
 ---
 
+- 2026-05-10 [sprint 1.7] **low** — Sprint 1.7 verification and manual smoke leave local research runs/items/patterns and pending-review market-intelligence opportunities in the development database. Mitigation: acceptable for local MVP testing; add cleanup mode to `scripts/verify_sprint17.sh` in a future hardening pass.
+- 2026-05-10 [sprint 1.7] **medium** — Anthropic primary LLM calls returned 404 in this environment during Sprint 1.7 smoke testing. OpenAI fallback successfully handled market pattern extraction after completion budget tuning. Mitigation: verify Anthropic model/key configuration before relying on primary provider.
+- 2026-05-10 [sprint 1.7] **medium** — `scripts/verify_sprint15.sh` still fails generation guard-path checks after Sprint 1.7. This was observed before the Sprint 1.7 merge and appears unrelated to marketplace intelligence. Mitigation: keep Sprint 1.7 accepted based on its own verifier and manual smoke; schedule Sprint 1.5 verifier repair or generation route audit separately.
 - 2026-05-09 [sprint 1.5] **low** — Generation routes return JSON on error but redirect (303) on success. Callers that follow redirects via curl -L will land on the product edit HTML, not JSON. Verification script tests guard paths (JSON) and success via DB row count, not HTTP body.
 - 2026-05-09 [sprint 1.5] **low** — QA reverse_providers uses the alternate model only if both API keys are configured. With one key, QA and generation use the same model. No crash; noted in operator UX as "same-model QA".
 - 2026-05-09 [sprint 1.5] **low** — Content generation max_cost_usd=$0.012; a very long outline (8 sections × long content) could approach this ceiling for Anthropic Haiku. Mitigation: ceiling is pre-call estimated and blocked before any spend occurs.

@@ -36,6 +36,38 @@ python3 -m py_compile app/main.py app/db.py app/llm.py
 ./scripts/verify_sprint14.sh
 ```
 
+## Sprint 1.7
+
+```bash
+cd /home/jb/dev/hydra
+git status
+git log --oneline -10
+./scripts/preflight_check.sh
+bash scripts/verify_sprint151.sh
+LIVE=1 bash scripts/verify_sprint151.sh
+./scripts/verify_sprint15.sh
+bash scripts/verify_sprint16.sh
+ls -la app/alembic/versions
+ls -la app/templates
+ls -la scripts
+ls -la runbooks
+find /mnt/c/Users/jbsan/OneDrive/Documents/New\ project\ 2/hydra -maxdepth 3 -type f | sort
+python3 -m py_compile app/main.py app/db.py app/llm.py
+docker compose run --rm --no-deps hydra-console python -m py_compile /app/main.py /app/db.py /app/llm.py
+./scripts/backup_db.sh
+docker compose run --rm hydra-console alembic upgrade head
+docker compose run --rm hydra-console alembic downgrade 0002
+docker compose run --rm hydra-console alembic upgrade head
+docker compose run --rm hydra-console alembic current -v
+docker compose down
+docker compose up -d --build
+./scripts/preflight_check.sh
+bash scripts/verify_sprint17.sh
+LIVE=1 bash scripts/verify_sprint17.sh
+bash scripts/verify_sprint16.sh
+bash scripts/verify_sprint15.sh
+```
+
 
 ## Sprint 1.3
 

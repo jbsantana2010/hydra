@@ -964,3 +964,59 @@ Sprint 1.3 shipped: attribution columns + idempotent `ALTER` migrations, distrib
 #### Files expected to change
 
 - `app/llm.py` (new), `app/db.py` (new model + import), `app/main.py` (replace classifier + prefill calls; budget readout in `/settings`), `app/templates/settings.html`, `requirements.txt` (add `anthropic` and `openai` SDKs), `.env.example` (add `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), `scripts/verify_sprint14.sh` (new), runbooks updated per template.
+### Sprint 1.7 — Marketplace Intelligence v1
+
+**Status:** IN PROGRESS (2026-05-10)
+**Preceded by:** Sprint 1.5.1 (LLM Observability + UX Polish)
+**Followed by:** Sprint 4.0 (Gumroad publishing automation)
+
+**Strategic pivot rationale:** Original Sprint 1.7 (Reddit collector + Celery scheduler) was
+deprioritized in favor of Marketplace Intelligence v1. Reddit signals are demand-adjacent;
+Etsy/marketplace signals are purchase-intent. Market intelligence feeds the opportunity→product
+loop with patterns grounded in observed buyer behavior, not forum discussion.
+
+**What this sprint adds:**
+- `market_research_runs` — one row per research session (manual or CSV)
+- `market_research_items` — one observed listing/product per row
+- `market_patterns` — LLM-extracted winning patterns from a run
+- Routes: list, new, create, detail, import-csv, analyze, generate-opportunities, delete
+- Templates: `market_research_list.html`, `market_research_detail.html`
+- Nav link: "Market Research" added to base.html
+- Verify: `scripts/verify_sprint17.sh`
+- Sample data: `scripts/sample_research.csv`
+- Codex brief: `runbooks/sprint_1.7_codex_brief.md`
+
+**Operator flow:**
+1. Create research run
+2. Import CSV of marketplace observations (manual research or tool export)
+3. Click "Analyze Patterns" → LLM extracts title structures, pricing ranges, pain points, etc.
+4. Review extracted patterns
+5. Click "Generate Opportunities" → LLM creates original product ideas from patterns
+6. Approve candidates in /opportunities UI (human gate — unchanged)
+7. Approved candidates flow into existing generation pipeline
+
+**Human approval gates (unchanged):**
+- Selecting which opportunity to approve
+- Final product approval before publishing
+- Any action touching external accounts or public content
+
+**Do NOT add in 1.7:**
+- Etsy API OAuth or publishing
+- Automated marketplace scraping
+- Celery/Redis scheduler
+- Image generation
+- Auto-publishing
+- Printify/POD integration
+- Embeddings or vector search
+
+**Acceptance criteria:**
+- `bash scripts/verify_sprint17.sh` exits 0
+- `LIVE=1 bash scripts/verify_sprint17.sh` exits 0
+- `alembic upgrade head` from 0002 applies 0003 cleanly
+- `alembic downgrade 0002` drops all 3 new tables cleanly
+- CSV import → analyze → generate-opportunities creates candidates visible in /opportunities
+- No candidate auto-advances past pending_review without operator action
+- Background scheduling.
+
+#### Files expected to change
+

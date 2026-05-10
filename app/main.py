@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import csv
+import io
 import json
 import os
 import re
@@ -10,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, func, select
@@ -19,6 +21,9 @@ from db import (
     Approval,
     Listing,
     LlmCall,
+    MarketPattern,
+    MarketResearchItem,
+    MarketResearchRun,
     OpportunityCandidate,
     Product,
     ProductArtifact,
@@ -40,6 +45,18 @@ EXPORT_ROOT = Path(os.getenv("HYDRA_EXPORT_ROOT", "exports"))
 
 app = FastAPI(title="HYDRA Console", version="0.1.0")
 templates = Jinja2Templates(directory="templates")
+
+
+def _from_json(value: str | None):
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+
+templates.env.filters["from_json"] = _from_json
 
 PRODUCT_STATUSES = ["draft", "generated", "listed", "live", "paused", "archived"]
 ARTIFACT_TYPES = ["outline", "product_content", "listing_copy", "qa_review", "distribution_post"]
@@ -441,6 +458,505 @@ def update_budget(daily_budget_usd: Decimal = Form(...)):
 
 def _model_to_dict(model) -> dict:
     return {column.name: getattr(model, column.name) for column in model.__table__.columns}
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.7 — Marketplace Intelligence v1
+# ---------------------------------------------------------------------------
+
+
+@app.get("/market-research")
+def market_research_list(request: Request, flash: str = "", msg: str = ""):
+    with session_scope() as session:
+        run_rows = session.scalars(
+            select(MarketResearchRun).order_by(desc(MarketResearchRun.created_at))
+        ).all()
+        pattern_counts = {
+            run.id: session.scalar(
+                select(func.count(MarketPattern.id)).where(MarketPattern.run_id == run.id)
+            ) or 0
+            for run in run_rows
+        }
+        item_counts = {run.id: run.item_count or 0 for run in run_rows}
+        runs = [_model_to_dict(run) for run in run_rows]
+
+    return templates.TemplateResponse(
+        "market_research_list.html",
+        {
+            "request": request,
+            "runs": runs,
+            "pattern_counts": pattern_counts,
+            "item_counts": item_counts,
+            "flash_banner": _flash_banner(flash, msg),
+        },
+    )
+
+
+@app.get("/market-research/new")
+def market_research_new(request: Request):
+    return templates.TemplateResponse(
+        "market_research_detail.html",
+        {
+            "request": request,
+            "run": None,
+            "items": [],
+            "patterns": [],
+            "page": 1,
+            "page_size": 25,
+            "total_pages": 1,
+            "total_items": 0,
+            "flash_banner": None,
+        },
+    )
+
+
+@app.post("/market-research")
+def market_research_create(
+    label: str = Form(...),
+    category: str = Form(""),
+    query: str = Form(""),
+    notes: str = Form(""),
+):
+    with session_scope() as session:
+        run = MarketResearchRun(
+            label=label.strip(),
+            category=category.strip() or None,
+            query=query.strip() or None,
+            notes=notes.strip() or None,
+        )
+        session.add(run)
+        session.flush()
+        run_id = run.id
+    return RedirectResponse(url=f"/market-research/{run_id}", status_code=303)
+
+
+@app.get("/market-research/{run_id}")
+def market_research_detail(
+    request: Request,
+    run_id: int,
+    flash: str = "",
+    msg: str = "",
+    page: int = 1,
+):
+    page = max(1, page)
+    page_size = 25
+    offset = (page - 1) * page_size
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        item_rows = session.scalars(
+            select(MarketResearchItem)
+            .where(MarketResearchItem.run_id == run_id)
+            .order_by(MarketResearchItem.id)
+            .offset(offset)
+            .limit(page_size)
+        ).all()
+        total_items = session.scalar(
+            select(func.count(MarketResearchItem.id)).where(MarketResearchItem.run_id == run_id)
+        ) or 0
+        pattern_rows = session.scalars(
+            select(MarketPattern)
+            .where(MarketPattern.run_id == run_id)
+            .order_by(MarketPattern.pattern_type, MarketPattern.id)
+        ).all()
+        run_data = _model_to_dict(run)
+        items = [_model_to_dict(item) for item in item_rows]
+        patterns = [_model_to_dict(pattern) for pattern in pattern_rows]
+
+    return templates.TemplateResponse(
+        "market_research_detail.html",
+        {
+            "request": request,
+            "run": run_data,
+            "items": items,
+            "patterns": patterns,
+            "flash_banner": _flash_banner(flash, msg),
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "total_pages": max(1, -(-total_items // page_size)),
+        },
+    )
+
+
+@app.post("/market-research/{run_id}/import-csv")
+async def market_research_import_csv(run_id: int, file: UploadFile = File(...)):
+    contents = await file.read()
+    text = contents.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    imported = 0
+    errors: list[str] = []
+
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        for i, row in enumerate(reader, start=1):
+            title = (row.get("title") or "").strip()
+            if not title:
+                errors.append(f"Row {i}: missing title")
+                continue
+            session.add(
+                MarketResearchItem(
+                    run_id=run_id,
+                    title=title,
+                    shop_name=(row.get("shop_name") or "").strip() or None,
+                    price_cents=_parse_price_cents(row.get("price")),
+                    currency=(row.get("currency") or "USD").strip().upper() or "USD",
+                    rating=_parse_float(row.get("rating")),
+                    review_count=_parse_int(row.get("review_count")),
+                    tags=(row.get("tags") or "").strip() or None,
+                    listing_url=(row.get("listing_url") or "").strip() or None,
+                    product_type=(row.get("product_type") or "").strip() or None,
+                    aesthetic=(row.get("aesthetic") or "").strip() or None,
+                    bundle_type=(row.get("bundle_type") or "").strip() or None,
+                    pain_point=(row.get("pain_point") or "").strip() or None,
+                    pattern_notes=(row.get("pattern_notes") or "").strip() or None,
+                    risk_flags=(row.get("risk_flags") or "").strip() or None,
+                )
+            )
+            imported += 1
+        session.flush()
+        run.item_count = session.scalar(
+            select(func.count(MarketResearchItem.id)).where(MarketResearchItem.run_id == run_id)
+        ) or 0
+        run.source = "csv" if imported else run.source
+
+    msg = f"Imported {imported} items."
+    if errors:
+        msg += f" {len(errors)} skipped: " + "; ".join(errors[:3])
+    return _market_research_redirect(run_id, "success", msg)
+
+
+@app.post("/market-research/{run_id}/analyze")
+def market_research_analyze(run_id: int):
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        items = session.scalars(
+            select(MarketResearchItem).where(MarketResearchItem.run_id == run_id)
+        ).all()
+        if not items:
+            return _market_research_redirect(run_id, "error", "No items to analyze. Import a CSV first.")
+
+        schema = {
+            "patterns": [
+                {
+                    "pattern_type": "title_structure",
+                    "pattern_summary": "string",
+                    "example_titles": ["string"],
+                    "price_range_low": None,
+                    "price_range_high": None,
+                    "recommended_modality": "planner",
+                    "recommended_marketplace": "etsy",
+                    "confidence": "medium",
+                }
+            ]
+        }
+        try:
+            result = call_llm_json(
+                session,
+                "market_pattern_extraction",
+                _market_pattern_system_prompt(),
+                _market_pattern_user_prompt(items),
+                schema,
+                max_cost_usd=0.012,
+            )
+        except (LlmBlocked, LlmFailed) as exc:
+            return _market_research_redirect(run_id, "error", f"Pattern analysis blocked or failed: {exc}")
+
+        patterns = result.get("patterns", []) if isinstance(result, dict) else []
+        existing = session.scalars(
+            select(MarketPattern).where(MarketPattern.run_id == run_id)
+        ).all()
+        for pattern in existing:
+            session.delete(pattern)
+        session.flush()
+
+        added = 0
+        for payload in patterns:
+            if not isinstance(payload, dict) or not payload.get("pattern_summary"):
+                continue
+            session.add(
+                MarketPattern(
+                    run_id=run_id,
+                    pattern_type=(payload.get("pattern_type") or "unknown")[:80],
+                    pattern_summary=str(payload["pattern_summary"])[:2000],
+                    example_titles=json.dumps(payload.get("example_titles") or []),
+                    price_range_low=_parse_int(payload.get("price_range_low")),
+                    price_range_high=_parse_int(payload.get("price_range_high")),
+                    recommended_modality=(payload.get("recommended_modality") or None),
+                    recommended_marketplace=(payload.get("recommended_marketplace") or None),
+                    confidence=(payload.get("confidence") or "medium"),
+                )
+            )
+            added += 1
+        run.status = "analyzed"
+
+    return _market_research_redirect(run_id, "success", f"Extracted {added} patterns.")
+
+
+@app.post("/market-research/{run_id}/generate-opportunities")
+def market_research_generate_opportunities(run_id: int):
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        patterns = session.scalars(
+            select(MarketPattern)
+            .where(MarketPattern.run_id == run_id)
+            .where(MarketPattern.confidence.in_(["medium", "high"]))
+            .where(MarketPattern.used_for_opportunity_id.is_(None))
+            .order_by(MarketPattern.id)
+        ).all()
+        if not patterns:
+            return _market_research_redirect(
+                run_id,
+                "error",
+                "No unused medium/high-confidence patterns. Run analysis first.",
+            )
+
+        schema = {
+            "opportunities": [
+                {
+                    "topic": "string",
+                    "modality": "planner",
+                    "marketplace": "etsy",
+                    "differentiation": "string",
+                    "target_buyer": "string",
+                    "price_point_dollars": 9,
+                    "pattern_basis": "string",
+                }
+            ]
+        }
+        try:
+            result = call_llm_json(
+                session,
+                "market_opportunity_generation",
+                _market_opportunity_system_prompt(),
+                _market_opportunity_user_prompt(patterns),
+                schema,
+                max_cost_usd=0.012,
+            )
+        except (LlmBlocked, LlmFailed) as exc:
+            return _market_research_redirect(run_id, "error", f"Opportunity generation blocked or failed: {exc}")
+
+        opportunities = result.get("opportunities", []) if isinstance(result, dict) else []
+        created_count = 0
+        unused_patterns = list(patterns)
+        for payload in opportunities:
+            if not isinstance(payload, dict) or not payload.get("topic"):
+                continue
+            candidate = _candidate_from_market_opportunity(payload)
+            session.add(candidate)
+            session.flush()
+            if unused_patterns:
+                unused_patterns.pop(0).used_for_opportunity_id = candidate.id
+            created_count += 1
+
+    return _market_research_redirect(
+        run_id,
+        "success",
+        f"Created {created_count} opportunities. Review them in /opportunities.",
+    )
+
+
+@app.delete("/market-research/{run_id}")
+def market_research_delete_api(run_id: int):
+    _delete_market_research_run(run_id)
+    return {"deleted": True, "run_id": run_id}
+
+
+@app.post("/market-research/{run_id}/delete")
+def market_research_delete_form(run_id: int):
+    _delete_market_research_run(run_id)
+    return RedirectResponse(
+        url="/market-research?flash=success&msg=Run+deleted",
+        status_code=303,
+    )
+
+
+def _delete_market_research_run(run_id: int) -> None:
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if run:
+            session.delete(run)
+
+
+def _market_research_redirect(run_id: int, flash: str, msg: str) -> RedirectResponse:
+    from urllib.parse import urlencode
+
+    return RedirectResponse(
+        url=f"/market-research/{run_id}?" + urlencode({"flash": flash, "msg": msg}),
+        status_code=303,
+    )
+
+
+def _flash_banner(flash: str, msg: str) -> dict | None:
+    if flash == "success":
+        return {"level": "success", "message": msg or "Done."}
+    if flash == "error":
+        return {"level": "error", "message": msg or "Error."}
+    if flash:
+        return {"level": "warn", "message": msg or flash}
+    return None
+
+
+def _parse_price_cents(value) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace("$", "").replace(",", "")
+    if not text:
+        return None
+    try:
+        return int(float(text) * 100)
+    except ValueError:
+        return None
+
+
+def _parse_int(value) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text or text.lower() == "null":
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+
+def _parse_float(value) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _market_pattern_system_prompt() -> str:
+    return (
+        "You are a marketplace product analyst. Analyze manually imported marketplace observations. "
+        "Extract structural patterns only. Do not recommend copying listings, shops, trademarks, or protected IP. "
+        "Return valid JSON only."
+    )
+
+
+def _market_pattern_user_prompt(items: list[MarketResearchItem]) -> str:
+    summaries = []
+    for index, item in enumerate(items[:60], start=1):
+        parts = [f"Title: {item.title}"]
+        if item.price_cents:
+            parts.append(f"Price: ${item.price_cents / 100:.2f}")
+        if item.rating:
+            parts.append(f"Rating: {item.rating}")
+        if item.review_count:
+            parts.append(f"Reviews: {item.review_count}")
+        if item.tags:
+            parts.append(f"Tags: {item.tags}")
+        if item.product_type:
+            parts.append(f"Type: {item.product_type}")
+        if item.aesthetic:
+            parts.append(f"Aesthetic: {item.aesthetic}")
+        if item.bundle_type:
+            parts.append(f"Bundle: {item.bundle_type}")
+        if item.pain_point:
+            parts.append(f"Pain point: {item.pain_point}")
+        if item.pattern_notes:
+            parts.append(f"Notes: {item.pattern_notes}")
+        summaries.append(f"{index}. " + " | ".join(parts))
+
+    return (
+        "Analyze these listings and return 5 to 15 patterns in JSON under key 'patterns'. "
+        "Pattern types may include title_structure, tag_cluster, pricing_range, bundle_pattern, "
+        "pain_point, underserved_angle, modality_recommendation, marketplace_recommendation. "
+        "Use integer cents for price ranges and confidence low/medium/high.\n\n"
+        + "\n".join(summaries)
+    )
+
+
+def _market_opportunity_system_prompt() -> str:
+    return (
+        "You are a digital product strategist for HYDRA. Generate original digital product opportunities from "
+        "marketplace patterns. Do not copy any listing. Do not create legal, medical, political, or financial advice products. "
+        "Return valid JSON only."
+    )
+
+
+def _market_opportunity_user_prompt(patterns: list[MarketPattern]) -> str:
+    pattern_text = "\n".join(
+        f"- [{p.pattern_type}] {p.pattern_summary}"
+        + (f" | Modality: {p.recommended_modality}" if p.recommended_modality else "")
+        + (f" | Marketplace: {p.recommended_marketplace}" if p.recommended_marketplace else "")
+        for p in patterns[:30]
+    )
+    return (
+        "Based on these market patterns, generate 3 to 5 original product ideas as JSON under key 'opportunities'. "
+        "Each item needs topic, modality, marketplace, differentiation, target_buyer, price_point_dollars, pattern_basis. "
+        "All generated opportunities must remain candidates requiring operator approval.\n\n"
+        f"PATTERNS:\n{pattern_text}"
+    )
+
+
+def _candidate_from_market_opportunity(payload: dict) -> OpportunityCandidate:
+    modality = str(payload.get("modality") or "digital download").strip()
+    marketplace = str(payload.get("marketplace") or "marketplace").strip()
+    differentiation = str(payload.get("differentiation") or "").strip()
+    target_buyer = str(payload.get("target_buyer") or "").strip()
+    pattern_basis = str(payload.get("pattern_basis") or "").strip()
+    price_point = payload.get("price_point_dollars")
+    evidence = (
+        f"Marketplace intelligence pattern. Modality: {modality}. Marketplace: {marketplace}. "
+        f"Differentiation: {differentiation}. Target buyer: {target_buyer}. "
+        f"Suggested price: ${price_point or '?'}. Pattern basis: {pattern_basis}."
+    )
+    candidate_data = {
+        "source": "market_intelligence",
+        "topic": str(payload["topic"])[:200],
+        "vertical": _vertical_from_marketplace_payload(payload),
+        "production_format": _format_from_modality(modality),
+        "demand_velocity": 65,
+        "monetization_fit": 78,
+        "ai_exploitability": 70,
+        "cross_source_confirmation": 45,
+        "time_to_revenue": 75,
+        "saturation_penalty": 30,
+        "platform_risk_penalty": 22,
+        "status": "pending_review",
+        "evidence": evidence[:1000],
+    }
+    candidate_data["score"] = calculate_score(candidate_data)
+    return OpportunityCandidate(**candidate_data)
+
+
+def _vertical_from_marketplace_payload(payload: dict) -> str:
+    marketplace = str(payload.get("marketplace") or "marketplace").strip()
+    target = str(payload.get("target_buyer") or "").strip()
+    if target:
+        return f"Marketplace intelligence: {target}"[:120]
+    return f"Marketplace intelligence: {marketplace}"[:120]
+
+
+def _format_from_modality(modality: str) -> str:
+    mapping = {
+        "printable": "printable PDF pack",
+        "planner": "planner PDF",
+        "canva_template": "Canva template",
+        "prompt_pack": "prompt pack",
+        "pod_design": "print-on-demand design",
+        "checklist": "checklist PDF",
+        "worksheet": "worksheet PDF",
+        "tracker": "tracker PDF",
+        "social_kit": "social media kit",
+        "bundle": "digital bundle",
+    }
+    return mapping.get((modality or "").strip(), "digital download")
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")

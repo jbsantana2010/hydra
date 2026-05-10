@@ -280,6 +280,8 @@ def _completion_budget_for(purpose: str) -> int:
         return 180
     if purpose == "product_prefill":
         return 360
+    if purpose in ("market_pattern_extraction", "market_opportunity_generation"):
+        return 1600
     return 300
 
 

@@ -166,6 +166,72 @@ class Listing(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class MarketResearchRun(Base):
+    __tablename__ = "market_research_runs"
+
+    id = Column(Integer, primary_key=True)
+    label = Column(Text, nullable=False)
+    source = Column(Text, nullable=False, default="manual")
+    category = Column(Text)
+    query = Column(Text)
+    item_count = Column(Integer, default=0)
+    status = Column(Text, nullable=False, default="raw")
+    notes = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MarketResearchItem(Base):
+    __tablename__ = "market_research_items"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(
+        Integer,
+        ForeignKey("market_research_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title = Column(Text, nullable=False)
+    shop_name = Column(Text)
+    price_cents = Column(Integer)
+    currency = Column(Text, default="USD")
+    rating = Column(Numeric(3, 2))
+    review_count = Column(Integer)
+    tags = Column(Text)
+    listing_url = Column(Text)
+    product_type = Column(Text)
+    aesthetic = Column(Text)
+    bundle_type = Column(Text)
+    pain_point = Column(Text)
+    pattern_notes = Column(Text)
+    risk_flags = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class MarketPattern(Base):
+    __tablename__ = "market_patterns"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(
+        Integer,
+        ForeignKey("market_research_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pattern_type = Column(Text, nullable=False)
+    pattern_summary = Column(Text, nullable=False)
+    example_titles = Column(Text)
+    price_range_low = Column(Integer)
+    price_range_high = Column(Integer)
+    recommended_modality = Column(Text)
+    recommended_marketplace = Column(Text)
+    confidence = Column(Text, default="medium")
+    used_for_opportunity_id = Column(
+        Integer,
+        ForeignKey("opportunity_candidates.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(DateTime, server_default=func.now())
+
+
 def init_db() -> None:
     """Initialize the database via Alembic migrations.
 
@@ -237,6 +303,54 @@ def _apply_one_shot_migrations() -> None:
             updated_at  TIMESTAMP DEFAULT now()
         )""",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_listings_product_platform ON listings (product_id, platform)",
+        # Sprint 1.7 — Marketplace Intelligence safety nets.
+        """CREATE TABLE IF NOT EXISTS market_research_runs (
+            id SERIAL PRIMARY KEY,
+            label TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            category TEXT,
+            query TEXT,
+            item_count INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'raw',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS market_research_items (
+            id SERIAL PRIMARY KEY,
+            run_id INTEGER NOT NULL REFERENCES market_research_runs(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            shop_name TEXT,
+            price_cents INTEGER,
+            currency TEXT DEFAULT 'USD',
+            rating NUMERIC(3,2),
+            review_count INTEGER,
+            tags TEXT,
+            listing_url TEXT,
+            product_type TEXT,
+            aesthetic TEXT,
+            bundle_type TEXT,
+            pain_point TEXT,
+            pattern_notes TEXT,
+            risk_flags TEXT,
+            created_at TIMESTAMP DEFAULT now()
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_market_research_items_run_id ON market_research_items (run_id)",
+        """CREATE TABLE IF NOT EXISTS market_patterns (
+            id SERIAL PRIMARY KEY,
+            run_id INTEGER NOT NULL REFERENCES market_research_runs(id) ON DELETE CASCADE,
+            pattern_type TEXT NOT NULL,
+            pattern_summary TEXT NOT NULL,
+            example_titles TEXT,
+            price_range_low INTEGER,
+            price_range_high INTEGER,
+            recommended_modality TEXT,
+            recommended_marketplace TEXT,
+            confidence TEXT DEFAULT 'medium',
+            used_for_opportunity_id INTEGER REFERENCES opportunity_candidates(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT now()
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_market_patterns_run_id ON market_patterns (run_id)",
     ]
     with engine.begin() as conn:
         for stmt in statements:

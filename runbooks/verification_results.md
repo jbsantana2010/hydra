@@ -82,3 +82,23 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | HN collection without keys | PASS — returned HackerNews JSON using fallback classification |
 | Product approval prefill without keys | PASS — draft product created with deterministic notes |
 | Existing Products/Revenue/Launch routes | PASS |
+
+---
+
+## Sprint 1.7 — 2026-05-10
+
+| Check | Result |
+|---|---|
+| OneDrive Sprint 1.7 files merged into WSL source of truth | PASS |
+| `python3 -m py_compile app/main.py app/db.py app/llm.py` | PASS |
+| Container py_compile for `main.py`, `db.py`, `llm.py` | PASS |
+| Alembic upgrade to `0003` | PASS |
+| Alembic current | PASS — `0003 (head)` |
+| `./scripts/preflight_check.sh` | PASS |
+| `bash scripts/verify_sprint17.sh` | PASS — 30/30 |
+| `LIVE=1 bash scripts/verify_sprint17.sh` | PASS — 38/38 |
+| `bash scripts/verify_sprint16.sh` | PASS — 43/43, 3 optional LIVE_DB checks skipped |
+| `bash scripts/verify_sprint15.sh` | FAIL — preexisting generation guard-path verifier failures |
+| Manual CSV import | PASS — 10 items imported from `scripts/sample_research.csv` |
+| Manual pattern extraction | PASS — 13 market patterns created |
+| Manual opportunity generation | PASS — 5 pending-review candidates created |

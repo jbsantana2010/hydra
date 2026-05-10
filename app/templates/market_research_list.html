@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+  <h2 style="margin:0;">Market Research</h2>
+  <a href="/market-research/new" class="btn">+ New Run</a>
+</div>
+
+{% if flash_banner %}
+<div class="banner {% if flash_banner.level == 'success' %}good{% elif flash_banner.level == 'error' %}error{% else %}warn{% endif %}"
+     style="margin-bottom:16px;">
+  {{ flash_banner.message }}
+</div>
+{% endif %}
+
+<p class="muted">
+  Import curated marketplace research, extract winning patterns, and generate opportunity candidates.
+  No scraping — operator-imported data only.
+</p>
+
+{% if runs %}
+<table class="data-table" style="width:100%;">
+  <thead>
+    <tr>
+      <th>Label</th>
+      <th>Category</th>
+      <th>Source</th>
+      <th>Status</th>
+      <th style="text-align:right;">Items</th>
+      <th style="text-align:right;">Patterns</th>
+      <th>Created</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    <tr>
+      <td><a href="/market-research/{{ run.id }}"><strong>{{ run.label }}</strong></a></td>
+      <td class="muted">{{ run.category or "—" }}</td>
+      <td>
+        {% if run.source == "manual" %}
+          <span style="background:#aaa;color:#fff;padding:2px 7px;border-radius:3px;font-size:11px;">manual</span>
+        {% elif run.source == "csv" %}
+          <span style="background:#3b82f6;color:#fff;padding:2px 7px;border-radius:3px;font-size:11px;">csv</span>
+        {% else %}
+          <span style="background:#16a34a;color:#fff;padding:2px 7px;border-radius:3px;font-size:11px;">{{ run.source }}</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if run.status == "raw" %}
+          <span style="background:#e5e7eb;color:#374151;padding:2px 7px;border-radius:3px;font-size:11px;">raw</span>
+        {% elif run.status == "analyzed" %}
+          <span style="background:#fbbf24;color:#000;padding:2px 7px;border-radius:3px;font-size:11px;">analyzed</span>
+        {% elif run.status == "archived" %}
+          <span style="background:#374151;color:#fff;padding:2px 7px;border-radius:3px;font-size:11px;">archived</span>
+        {% else %}
+          <span class="muted">{{ run.status }}</span>
+        {% endif %}
+      </td>
+      <td style="text-align:right;">{{ item_counts.get(run.id, 0) }}</td>
+      <td style="text-align:right;">{{ pattern_counts.get(run.id, 0) }}</td>
+      <td class="muted" style="white-space:nowrap;">
+        {% if run.created_at %}{{ run.created_at.strftime('%Y-%m-%d') }}{% endif %}
+      </td>
+      <td style="white-space:nowrap;">
+        <a href="/market-research/{{ run.id }}">View</a>
+        &nbsp;
+        <form method="post" action="/market-research/{{ run.id }}/delete"
+              style="display:inline;"
+              onsubmit="return confirm('Delete this research run and all its items and patterns?');">
+          <button type="submit"
+                  style="background:none;border:none;color:#dc2626;cursor:pointer;padding:0;font-size:inherit;">
+            Delete
+          </button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="panel" style="text-align:center;padding:48px 24px;color:#6b7280;">
+  <div style="font-size:32px;margin-bottom:12px;">📋</div>
+  <div style="font-size:16px;margin-bottom:8px;">No research runs yet.</div>
+  <div class="muted">Start by creating a new run and importing a CSV of marketplace listings.</div>
+  <div style="margin-top:20px;">
+    <a href="/market-research/new" class="btn">+ New Run</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
