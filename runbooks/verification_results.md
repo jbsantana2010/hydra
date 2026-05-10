@@ -137,3 +137,19 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | Product 43 cover/sales previews | PASS |
 | Product 43 Gumroad/Fiverr/mockup/value presentation docs | PASS |
 | Product 43 manifest | PASS — `package_version` is `1.9`; tracks PDF, preview, and presentation assets |
+
+---
+
+## Sprint 2.0 — 2026-05-10
+
+| Check | Result |
+|---|---|
+| `./scripts/preflight_check.sh` | PASS |
+| `bash scripts/verify_sprint20.sh` | PASS — 13/13 |
+| `LIVE=1 bash scripts/verify_sprint20.sh` | PASS — 26/26 |
+| `bash scripts/verify_sprint19.sh` | PASS — 9/9 |
+| `LIVE=1 bash scripts/verify_sprint19.sh` | PASS — 22/22 |
+| Product 43 `visual/` folder | PASS |
+| Product 43 manifest | PASS — `package_version` is `2.0`; tracks `visual_assets` and `visual_theme` |
+| Product 43 theme classification | PASS — `adhd_focus` |
+| Target platforms | PASS — Fiverr, Gumroad, Pinterest, Sellfy, Payhip |

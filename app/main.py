@@ -1366,6 +1366,7 @@ def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
     preview_dir = package_dir / "preview"
     pdf_dir = package_dir / "pdf"
     presentation_dir = package_dir / "presentation"
+    visual_dir = package_dir / "visual"
     package_dir.mkdir(parents=True, exist_ok=True)
     source_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1375,6 +1376,7 @@ def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
     pdf_files: list[Path] = []
     preview_files: list[Path] = []
     presentation_files: list[Path] = []
+    visual_files: list[Path] = []
 
     for artifact_type in ARTIFACT_TYPES:
         artifact = artifact_map.get(artifact_type)
@@ -1419,6 +1421,22 @@ def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
         _write_package_file(path, content, included_files)
         presentation_files.append(path)
 
+    visual_dir.mkdir(parents=True, exist_ok=True)
+    visual_theme = _build_visual_theme_intelligence(product, artifact_map)
+    visual_outputs = {
+        "visual_theme_intelligence.json": json.dumps(visual_theme, indent=2),
+        "aesthetic_system.md": _build_aesthetic_system_doc(product, visual_theme),
+        "cover_mockup_prompts.md": _build_cover_mockup_prompt_doc(product, artifact_map, visual_theme),
+        "product_gallery_plan.md": _build_product_gallery_plan(product, artifact_map, visual_theme),
+        "marketplace_visual_specs.md": _build_marketplace_visual_specs(product, visual_theme),
+        "image_slot_manifest.json": json.dumps(_build_image_slot_manifest(product, visual_theme), indent=2),
+        "presentation_hierarchy.md": _build_presentation_hierarchy(product, artifact_map, visual_theme),
+    }
+    for filename, content in visual_outputs.items():
+        path = visual_dir / filename
+        _write_package_file(path, content, included_files)
+        visual_files.append(path)
+
     readme_path = package_dir / "README.md"
     _write_package_file(readme_path, _build_package_readme(product, artifact_map), included_files)
 
@@ -1427,7 +1445,7 @@ def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
 
     manifest_path = package_dir / "manifest.json"
     manifest = {
-        "package_version": "1.9",
+        "package_version": "2.0",
         "product_id": product_id,
         "title": product.get("title"),
         "production_format": product.get("production_format"),
@@ -1437,6 +1455,8 @@ def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
         "pdf_files": [_package_relative(path) for path in pdf_files],
         "preview_assets": [_package_relative(path) for path in preview_files],
         "presentation_assets": [_package_relative(path) for path in presentation_files],
+        "visual_assets": [_package_relative(path) for path in visual_files],
+        "visual_theme": visual_theme,
         "artifact_ids": {
             artifact_type: artifact.get("id")
             for artifact_type, artifact in artifact_map.items()
@@ -1871,6 +1891,287 @@ def _build_perceived_value_stack(product: dict, content_data: dict, listing_data
     ])
 
 
+def _build_visual_theme_intelligence(product: dict, artifact_map: dict[str, dict]) -> dict:
+    outline = _artifact_json(artifact_map.get("outline"))
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    text = " ".join(
+        str(value or "")
+        for value in (
+            product.get("title"),
+            product.get("production_format"),
+            outline.get("buyer_persona"),
+            outline.get("core_pain_solved"),
+            outline.get("tagline"),
+            (listing.get("etsy") or {}).get("title"),
+        )
+    ).lower()
+    niche = _visual_niche_for(text)
+    systems = {
+        "adhd_focus": {
+            "palette": ["#0F172A", "#2563EB", "#F59E0B", "#F8FAFC", "#E2E8F0"],
+            "typography": "bold sans-serif headings, calm readable body text",
+            "mood": "clear, structured, low-clutter, encouraging",
+            "avoid": ["busy backgrounds", "medical claims", "chaotic sticker overload"],
+            "buyer_signal": "feels simple enough to start today",
+        },
+        "student_study": {
+            "palette": ["#111827", "#10B981", "#60A5FA", "#FFFFFF", "#F3F4F6"],
+            "typography": "clean academic sans-serif with strong section labels",
+            "mood": "organized, fresh, efficient, semester-ready",
+            "avoid": ["childish school graphics", "overly corporate styling"],
+            "buyer_signal": "helps the buyer feel prepared and in control",
+        },
+        "creator_business": {
+            "palette": ["#18181B", "#D97706", "#F4F4F5", "#FFFFFF", "#71717A"],
+            "typography": "modern editorial sans-serif with premium spacing",
+            "mood": "premium, practical, businesslike, polished",
+            "avoid": ["generic laptop stock imagery", "fake revenue screenshots"],
+            "buyer_signal": "looks like a serious operating template",
+        },
+        "wellness_lifestyle": {
+            "palette": ["#1F2937", "#7C9885", "#EADBC8", "#FFFFFF", "#F3EFE7"],
+            "typography": "soft sans-serif with spacious headings",
+            "mood": "calm, reflective, supportive, printable-friendly",
+            "avoid": ["medical/therapy claims", "overly clinical layouts"],
+            "buyer_signal": "feels gentle and easy to keep using",
+        },
+        "generic_printable": {
+            "palette": ["#111111", "#3B82F6", "#F8FAFC", "#FFFFFF", "#D1D5DB"],
+            "typography": "high-contrast sans-serif headings with readable body text",
+            "mood": "clean, useful, trustworthy, upload-ready",
+            "avoid": ["visual clutter", "tiny unreadable preview text"],
+            "buyer_signal": "instantly communicates what is included",
+        },
+    }
+    system = systems[niche]
+    return {
+        "niche": niche,
+        "palette": system["palette"],
+        "typography": system["typography"],
+        "mood": system["mood"],
+        "avoid": system["avoid"],
+        "buyer_signal": system["buyer_signal"],
+        "primary_visual_promise": outline.get("core_pain_solved") or "clearer planning and faster use",
+        "thumbnail_rule": "title and product type must remain readable at 300px wide",
+        "composition_rule": "show the cover first, then 3-5 interior pages, then included-files/value stack",
+        "platforms": ["Fiverr", "Gumroad", "Pinterest", "Sellfy", "Payhip"],
+    }
+
+
+def _visual_niche_for(text: str) -> str:
+    if any(word in text for word in ("adhd", "focus", "executive function", "distraction")):
+        return "adhd_focus"
+    if any(word in text for word in ("student", "study", "school", "exam", "semester")):
+        return "student_study"
+    if any(word in text for word in ("business", "creator", "sales", "launch", "client", "entrepreneur")):
+        return "creator_business"
+    if any(word in text for word in ("wellness", "self-care", "mental", "habit", "reflection")):
+        return "wellness_lifestyle"
+    return "generic_printable"
+
+
+def _build_aesthetic_system_doc(product: dict, theme: dict) -> str:
+    return "\n".join([
+        f"# Aesthetic System - {product.get('title')}",
+        "",
+        f"## Niche\n\n{theme['niche']}",
+        "",
+        f"## Mood\n\n{theme['mood']}",
+        "",
+        "## Palette",
+        "",
+        *(f"- `{color}`" for color in theme["palette"]),
+        "",
+        f"## Typography\n\n{theme['typography']}",
+        "",
+        f"## Buyer Signal\n\n{theme['buyer_signal']}",
+        "",
+        "## Avoid",
+        "",
+        *(f"- {item}" for item in theme["avoid"]),
+        "",
+        "## Design Rules",
+        "",
+        f"- {theme['thumbnail_rule']}",
+        f"- {theme['composition_rule']}",
+        "- Use high contrast for all text on marketplace preview images.",
+        "- Show actual printable pages, not abstract decorative art.",
+    ])
+
+
+def _build_cover_mockup_prompt_doc(product: dict, artifact_map: dict[str, dict], theme: dict) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    product_title = product.get("title")
+    return "\n".join([
+        f"# Cover And Mockup Prompt Briefs - {product_title}",
+        "",
+        "These are prompts/specs for a future image generator or a human/Fiverr designer. Do not publish without review.",
+        "",
+        "## Cover Prompt",
+        "",
+        f"Create a premium marketplace cover for a digital download titled '{product_title}'. "
+        f"Visual mood: {theme['mood']}. Palette: {', '.join(theme['palette'])}. "
+        f"Typography: {theme['typography']}. The cover must clearly communicate: {outline.get('core_pain_solved', theme['primary_visual_promise'])}. "
+        "Use clean printable-product composition, strong hierarchy, readable title, and no fake reviews or trademarked elements.",
+        "",
+        "## Mockup Prompt",
+        "",
+        f"Create a realistic digital product mockup showing the cover plus 3-5 interior printable pages for '{product_title}'. "
+        "Show pages fanned or stacked on a neutral desk-style background. Text must be readable at thumbnail size. "
+        "Avoid hands, fake devices, fake logos, and exaggerated claims.",
+        "",
+        "## Negative Prompt / Exclusions",
+        "",
+        "- No brand imitation",
+        "- No fake ratings, testimonials, or earnings",
+        "- No medical/legal/financial claims",
+        "- No blurry text",
+        "- No crowded collage layouts",
+    ])
+
+
+def _build_product_gallery_plan(product: dict, artifact_map: dict[str, dict], theme: dict) -> str:
+    content = _artifact_json(artifact_map.get("product_content"))
+    sections = [str(section.get("title")) for section in content.get("sections", []) if section.get("title")]
+    slots = _visual_image_slots(product, theme)
+    lines = [
+        f"# Product Gallery Plan - {product.get('title')}",
+        "",
+        "## Gallery Sequence",
+        "",
+    ]
+    for slot in slots:
+        lines.append(f"{slot['slot']}. **{slot['name']}** — {slot['purpose']} ({slot['ratio']}, {slot['platform_fit']})")
+    lines.extend(["", "## Interior Pages To Feature", ""])
+    lines.extend(f"- {title}" for title in sections[:8])
+    lines.extend([
+        "",
+        "## Presentation Notes",
+        "",
+        "- First image must explain what the product is without reading the description.",
+        "- Second image should show actual included pages.",
+        "- Third image should show the buyer outcome/value stack.",
+        "- Pinterest pin should be tall, simple, and benefit-led.",
+    ])
+    return "\n".join(lines)
+
+
+def _build_marketplace_visual_specs(product: dict, theme: dict) -> str:
+    return "\n".join([
+        f"# Marketplace Visual Specs - {product.get('title')}",
+        "",
+        "| Platform | Recommended Assets | Notes |",
+        "|---|---|---|",
+        "| Fiverr | 1280x769 gig image, 3-gallery image set | Lead with service/result: polished printable package or mockup design brief. |",
+        "| Gumroad | 1280x720 cover, 1:1 thumbnail, preview images | Show cover, included pages, and value stack. |",
+        "| Pinterest | 1000x1500 vertical pin | Use title + outcome + one clean product mockup. |",
+        "| Sellfy | 1600x900 cover, 1:1 product thumbnail | Keep text minimal and use high contrast. |",
+        "| Payhip | 1200x675 cover, gallery previews | Show file type and included pages clearly. |",
+        "",
+        "## Universal Rules",
+        "",
+        f"- Palette: {', '.join(theme['palette'])}",
+        f"- Mood: {theme['mood']}",
+        "- Export PNG/JPG under 5MB unless marketplace requires otherwise.",
+        "- Avoid unreadable tiny text; use 3-7 words on thumbnails when possible.",
+    ])
+
+
+def _build_image_slot_manifest(product: dict, theme: dict) -> dict:
+    return {
+        "product_id": product.get("id"),
+        "title": product.get("title"),
+        "theme_niche": theme["niche"],
+        "slots": _visual_image_slots(product, theme),
+        "global_constraints": [
+            "human review required before publishing",
+            "no fake reviews, ratings, earnings, or testimonials",
+            "no marketplace logos unless operator has rights",
+            "no image generation API called in this sprint",
+        ],
+    }
+
+
+def _visual_image_slots(product: dict, theme: dict) -> list[dict]:
+    title = product.get("title")
+    base_prompt = f"{title}, {theme['mood']}, palette {', '.join(theme['palette'])}"
+    return [
+        {
+            "slot": 1,
+            "name": "hero_cover",
+            "ratio": "1:1",
+            "platform_fit": "Gumroad, Sellfy, Payhip thumbnail",
+            "purpose": "Communicate product title and digital-download format immediately.",
+            "prompt_seed": f"Square marketplace cover for {base_prompt}",
+        },
+        {
+            "slot": 2,
+            "name": "page_spread_mockup",
+            "ratio": "4:3",
+            "platform_fit": "Gumroad gallery, Fiverr gallery",
+            "purpose": "Show cover plus interior printable pages as a tangible bundle.",
+            "prompt_seed": f"Clean page spread mockup for {base_prompt}",
+        },
+        {
+            "slot": 3,
+            "name": "included_pages_stack",
+            "ratio": "16:9",
+            "platform_fit": "Sellfy, Payhip, Gumroad",
+            "purpose": "List what the buyer receives and raise perceived value.",
+            "prompt_seed": f"Included pages value stack graphic for {base_prompt}",
+        },
+        {
+            "slot": 4,
+            "name": "pinterest_pin",
+            "ratio": "2:3",
+            "platform_fit": "Pinterest",
+            "purpose": "Benefit-led vertical pin that can drive discovery.",
+            "prompt_seed": f"Vertical Pinterest pin for {base_prompt}",
+        },
+        {
+            "slot": 5,
+            "name": "fiverr_brief_preview",
+            "ratio": "1280x769",
+            "platform_fit": "Fiverr",
+            "purpose": "If outsourcing, show the desired final presentation quality.",
+            "prompt_seed": f"Fiverr gig gallery preview for {base_prompt}",
+        },
+    ]
+
+
+def _build_presentation_hierarchy(product: dict, artifact_map: dict[str, dict], theme: dict) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    universal = listing.get("universal") or {}
+    return "\n".join([
+        f"# Presentation Hierarchy - {product.get('title')}",
+        "",
+        "## 1. Thumbnail Message",
+        "",
+        product.get("title") or "",
+        "",
+        "## 2. Outcome Promise",
+        "",
+        outline.get("core_pain_solved") or universal.get("short_description") or theme["primary_visual_promise"],
+        "",
+        "## 3. Proof Of Contents",
+        "",
+        "Show cover, page spread, included page list, and PDF/ZIP file contents.",
+        "",
+        "## 4. Buyer Confidence Signals",
+        "",
+        "- Clear file format",
+        "- Personal-use license",
+        "- Immediate download",
+        "- Printable pages shown directly",
+        "- Human review before publishing",
+        "",
+        "## 5. Final CTA",
+        "",
+        "Download, print, and use today.",
+    ])
+
+
 def _write_printable_pdf(path: Path, product: dict, content_data: dict) -> None:
     title = str(product.get("title") or "Printable Pack")
     sections = content_data.get("sections") or []
@@ -1987,6 +2288,7 @@ def _build_package_readme(product: dict, artifact_map: dict[str, dict]) -> str:
         "- `source/` Markdown source files generated from HYDRA artifacts",
         "- `preview/` cover and sales-page HTML previews for marketplace presentation",
         "- `presentation/` Gumroad/Fiverr/mockup/value-stack briefs",
+        "- `visual/` theme intelligence, image-slot manifest, gallery plan, and visual prompts",
         "- `manifest.json` package metadata",
         "- `marketplace_checklist.md` upload checklist",
     ]
@@ -2052,6 +2354,7 @@ def _build_marketplace_checklist(product: dict, artifact_map: dict[str, dict]) -
         "- Cover direction: `preview/cover_preview.html`",
         "- Sales page framing: `preview/sales_page_preview.html`",
         "- Gumroad/Fiverr/mockup briefs: `presentation/`",
+        "- Visual theme and image-slot manifest: `visual/`",
         "",
         "## Required Human Review",
         "",

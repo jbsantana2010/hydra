@@ -145,7 +145,27 @@ Already shipped: file tracking, artifact export, Gumroad URL warnings, launch da
 
 ---
 
-### Sprint 2.0 — Schema discipline + backups
+### Sprint 2.0 — Visual Commerce Generation Bridge
+
+- **Objective:** Teach HYDRA how a winning digital product should look before any image generation exists.
+- **Status:** Complete 2026-05-10.
+- **Features:**
+  - Visual theme intelligence by niche.
+  - Aesthetic systems with palette, typography, mood, buyer signal, and avoid-list.
+  - Cover/mockup prompt briefs for future image generation or Fiverr designers.
+  - Product gallery planning.
+  - Marketplace visual specs for Fiverr, Gumroad, Pinterest, Sellfy, and Payhip.
+  - Image slot manifest.
+  - Presentation hierarchy generation.
+  - Manifest upgraded to `package_version: 2.0` with `visual_assets` and `visual_theme`.
+- **Dependencies:** Sprint 1.9 package builder.
+- **Risks:** Deterministic theme selection can be too coarse for unusual niches. Mitigation: outputs are editable specs and require human review before visual production.
+- **Acceptance criteria:** `bash scripts/verify_sprint20.sh` and `LIVE=1 bash scripts/verify_sprint20.sh` pass; product 43 package contains a complete `visual/` folder.
+- **Executor:** Codex-safe.
+
+---
+
+### Sprint 2.x — Schema discipline + backups
 
 - **Objective:** Stop running on `create_all()` before adding any more columns.
 - **Features:**

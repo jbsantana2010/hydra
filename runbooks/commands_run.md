@@ -117,6 +117,28 @@ bash scripts/verify_sprint18.sh
 LIVE=1 bash scripts/verify_sprint18.sh
 ```
 
+## Sprint 2.0
+
+```bash
+cd /home/jb/dev/hydra
+git status --short
+git log --oneline -6
+./scripts/preflight_check.sh
+bash scripts/verify_sprint19.sh
+python3 -m py_compile app/main.py app/db.py app/llm.py
+chmod +x scripts/verify_sprint20.sh
+bash scripts/verify_sprint20.sh
+docker compose up -d --build
+./scripts/preflight_check.sh
+LIVE=1 bash scripts/verify_sprint20.sh
+bash scripts/verify_sprint19.sh
+LIVE=1 bash scripts/verify_sprint19.sh
+curl -si -u admin:change-me -X POST http://localhost:8000/products/43/package --max-redirs 0
+find products/product_43/visual -maxdepth 2 -type f | sort
+python3 -m json.tool products/product_43/manifest.json
+python3 -m json.tool products/product_43/visual/visual_theme_intelligence.json
+```
+
 
 ## Sprint 1.3
 

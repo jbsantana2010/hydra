@@ -155,6 +155,31 @@ Entry format:
 - Next:
   - Add higher-fidelity optional PDF rendering and per-format printable layouts if a local renderer is available, still without marketplace automation.
 
+## 2026-05-10T22:35:13Z - Sprint 2.0 Closeout (Visual Commerce Generation Bridge)
+
+- Commit: `uncommitted at closeout`
+- Branch: `main`
+- Executor: Codex
+- Source of truth: `/home/jb/dev/hydra`
+- Summary:
+  - Added deterministic visual theme intelligence.
+  - Added aesthetic system, cover/mockup prompts, product gallery plan, marketplace visual specs, image slot manifest, and presentation hierarchy.
+  - Upgraded package manifest to `package_version: 2.0`.
+  - Preserved boundaries: no image APIs, no publishing automation, no browser automation, no scraping, no schedulers.
+- Verification:
+  - `bash scripts/verify_sprint20.sh` — PASS, 13/13.
+  - `LIVE=1 bash scripts/verify_sprint20.sh` — PASS, 26/26.
+  - `bash scripts/verify_sprint19.sh` — PASS.
+  - `LIVE=1 bash scripts/verify_sprint19.sh` — PASS.
+- Manual smoke:
+  - Product 43 package route returned success.
+  - Product 43 package includes complete `visual/` folder.
+  - Product 43 manifest reports `package_version: 2.0` and tracks visual assets/theme.
+- Known issues:
+  - See `runbooks/known_issues.md`.
+- Next:
+  - Add deterministic package quality scoring and upload-readiness checklist before any image generation or marketplace automation.
+
 ## 2026-05-09T03:55:00Z - Sprint 1.4 Controlled LLM Execution Layer
 
 - Commit: `unknown`

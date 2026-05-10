@@ -40,9 +40,9 @@ grep -q "perceived_value_stack.md" app/main.py \
   && pass "presentation: perceived value stack generated" \
   || fail "presentation: perceived value stack missing"
 
-grep -q '"package_version": "1.9"' app/main.py \
-  && pass "manifest: package_version 1.9" \
-  || fail "manifest: package_version 1.9 missing"
+grep -q '"package_version": "1.9"\|"package_version": "2.0"' app/main.py \
+  && pass "manifest: package_version 1.9 or newer" \
+  || fail "manifest: package_version missing"
 
 grep -q "simple PDF export" app/templates/product_edit.html \
   && pass "UI: package section mentions PDF export" \
@@ -157,7 +157,7 @@ import json, sys
 manifest = json.load(open(sys.argv[1]))
 required = ["pdf_files", "preview_assets", "presentation_assets"]
 missing = [key for key in required if not manifest.get(key)]
-if manifest.get("package_version") != "1.9":
+if manifest.get("package_version") not in ("1.9", "2.0"):
     missing.append("package_version")
 if missing:
     print("missing", missing)
