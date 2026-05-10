@@ -130,6 +130,31 @@ Entry format:
 - Next:
   - Improve product file quality with optional PDF conversion and better per-format printable templates.
 
+## 2026-05-10T22:23:49Z - Sprint 1.9 Closeout (Commercial Presentation Packaging)
+
+- Commit: `uncommitted at closeout`
+- Branch: `main`
+- Executor: Codex
+- Source of truth: `/home/jb/dev/hydra`
+- Summary:
+  - Extended the package builder with commercial presentation assets.
+  - Added cover preview HTML, sales-page preview HTML, presentation briefs, mockup specs, perceived value stack, and simple PDF export.
+  - Updated package manifest to version `1.9` with PDF, preview, and presentation asset tracking.
+  - Preserved local-only boundaries: no marketplace APIs, no publishing, no image generation, no scraping, no scheduler.
+- Verification:
+  - `bash scripts/verify_sprint19.sh` — PASS, 9/9.
+  - `LIVE=1 bash scripts/verify_sprint19.sh` — PASS, 22/22.
+  - `bash scripts/verify_sprint18.sh` — PASS.
+  - `LIVE=1 bash scripts/verify_sprint18.sh` — PASS.
+- Manual smoke:
+  - Product 43 package route returned success.
+  - Product 43 package includes PDF, previews, presentation docs, source files, printable HTML, README, checklist, and manifest.
+  - Product 43 manifest reports `package_version: 1.9`.
+- Known issues:
+  - See `runbooks/known_issues.md`.
+- Next:
+  - Add higher-fidelity optional PDF rendering and per-format printable layouts if a local renderer is available, still without marketplace automation.
+
 ## 2026-05-09T03:55:00Z - Sprint 1.4 Controlled LLM Execution Layer
 
 - Commit: `unknown`

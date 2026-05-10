@@ -11,6 +11,8 @@ Severities: `low` / `medium` / `high`.
 
 ---
 
+- 2026-05-10 [sprint 1.9] **low** — PDF export is a lightweight text-based PDF writer, not a full HTML/CSS renderer. Mitigation: package still includes printable HTML and checklist calls for human layout review before upload.
+- 2026-05-10 [sprint 1.9] **low** — Preview assets are HTML previews/specs rather than PNG/JPG marketplace images. This is intentional because Sprint 1.9 forbids image generation and browser automation. Mitigation: `presentation/mockup_cover_spec.md` and `presentation/fiverr_gig_brief.md` guide manual or outsourced mockup creation.
 - 2026-05-10 [sprint 1.8] **low** — Generated package files in the host-mounted `products/` directory are owned by the container user. This mirrors existing export behavior. Mitigation: acceptable for local MVP; fix alongside a non-root container user later.
 - 2026-05-10 [sprint 1.8] **low** — Printable output is HTML only; PDF conversion remains manual through browser print/export. Mitigation: README and marketplace checklist explain manual PDF/mockup review requirements.
 - 2026-05-10 [sprint 1.7] **low** — Sprint 1.7 verification and manual smoke leave local research runs/items/patterns and pending-review market-intelligence opportunities in the development database. Mitigation: acceptable for local MVP testing; add cleanup mode to `scripts/verify_sprint17.sh` in a future hardening pass.

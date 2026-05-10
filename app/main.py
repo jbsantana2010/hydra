@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import textwrap
 import zipfile
 from datetime import datetime
 from decimal import Decimal
@@ -1350,23 +1351,30 @@ def export_product_artifacts(product_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Sprint 1.8 — Product package builder
+# Sprint 1.8/1.9 — Product package builder
 # ---------------------------------------------------------------------------
 
 PRINTABLE_FORMAT_HINTS = ("planner", "printable", "worksheet", "tracker", "checklist")
 
 
 def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
-    """Create Markdown sources, printable HTML, manifest, checklist, and ZIP."""
+    """Create source files, printable assets, presentation docs, PDF, and ZIP."""
     product_id = int(product["id"])
     package_dir = PRODUCT_ROOT / f"product_{product_id}"
     source_dir = package_dir / "source"
     printable_dir = package_dir / "printable"
+    preview_dir = package_dir / "preview"
+    pdf_dir = package_dir / "pdf"
+    presentation_dir = package_dir / "presentation"
     package_dir.mkdir(parents=True, exist_ok=True)
     source_dir.mkdir(parents=True, exist_ok=True)
 
     warnings: list[str] = []
     included_files: list[Path] = []
+    printable_files: list[Path] = []
+    pdf_files: list[Path] = []
+    preview_files: list[Path] = []
+    presentation_files: list[Path] = []
 
     for artifact_type in ARTIFACT_TYPES:
         artifact = artifact_map.get(artifact_type)
@@ -1378,12 +1386,38 @@ def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
         _write_package_file(path, _artifact_to_markdown(artifact), included_files)
 
     content_data = _artifact_json(artifact_map["product_content"])
+    listing_data = _artifact_json(artifact_map["listing_copy"])
     if _is_printable_format(product.get("production_format", "")):
         printable_dir.mkdir(parents=True, exist_ok=True)
         printable_files = _generate_printable_html_files(product, content_data, printable_dir)
         included_files.extend(printable_files)
         if not printable_files:
             warnings.append("Printable format detected, but product_content had no sections to render.")
+        else:
+            pdf_dir.mkdir(parents=True, exist_ok=True)
+            pdf_path = pdf_dir / "printable_pack.pdf"
+            _write_printable_pdf(pdf_path, product, content_data)
+            included_files.append(pdf_path)
+            pdf_files.append(pdf_path)
+
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    cover_path = preview_dir / "cover_preview.html"
+    _write_package_file(cover_path, _render_cover_preview_html(product, artifact_map), included_files)
+    preview_files.append(cover_path)
+    sales_preview_path = preview_dir / "sales_page_preview.html"
+    _write_package_file(sales_preview_path, _render_sales_preview_html(product, listing_data), included_files)
+    preview_files.append(sales_preview_path)
+
+    presentation_dir.mkdir(parents=True, exist_ok=True)
+    for filename, content in (
+        ("gumroad_presentation_assets.md", _build_gumroad_presentation_assets(product, listing_data)),
+        ("fiverr_gig_brief.md", _build_fiverr_gig_brief(product, artifact_map)),
+        ("mockup_cover_spec.md", _build_mockup_cover_spec(product, artifact_map)),
+        ("perceived_value_stack.md", _build_perceived_value_stack(product, content_data, listing_data)),
+    ):
+        path = presentation_dir / filename
+        _write_package_file(path, content, included_files)
+        presentation_files.append(path)
 
     readme_path = package_dir / "README.md"
     _write_package_file(readme_path, _build_package_readme(product, artifact_map), included_files)
@@ -1393,12 +1427,16 @@ def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
 
     manifest_path = package_dir / "manifest.json"
     manifest = {
-        "package_version": "1.8",
+        "package_version": "1.9",
         "product_id": product_id,
         "title": product.get("title"),
         "production_format": product.get("production_format"),
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "included_files": [_package_relative(path) for path in included_files],
+        "printable_html_files": [_package_relative(path) for path in printable_files],
+        "pdf_files": [_package_relative(path) for path in pdf_files],
+        "preview_assets": [_package_relative(path) for path in preview_files],
+        "presentation_assets": [_package_relative(path) for path in presentation_files],
         "artifact_ids": {
             artifact_type: artifact.get("id")
             for artifact_type, artifact in artifact_map.items()
@@ -1515,6 +1553,9 @@ def _is_printable_format(production_format: str | None) -> bool:
 def _generate_printable_html_files(product: dict, content_data: dict, printable_dir: Path) -> list[Path]:
     sections = content_data.get("sections") or []
     written: list[Path] = []
+    cover_path = printable_dir / "00_cover.html"
+    cover_path.write_text(_render_printable_cover_html(product, content_data), encoding="utf-8")
+    written.append(cover_path)
     for index, section in enumerate(sections, start=1):
         title = str(section.get("title") or f"Section {index}")
         filename = f"{index:02d}_{_slugify(title, 48)}.html"
@@ -1542,13 +1583,15 @@ def _render_printable_html(product: dict, section_title: str, content: str) -> s
   <style>
     @page {{ size: letter; margin: 0.55in; }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; color: #111; background: #fff; font-family: Arial, Helvetica, sans-serif; line-height: 1.45; }}
-    .page {{ width: 100%; min-height: 9.9in; border: 2px solid #111; padding: 0.28in; }}
-    h1 {{ font-size: 24px; margin: 0 0 6px; }}
-    h2 {{ font-size: 15px; margin: 0 0 18px; font-weight: 400; }}
+    body {{ margin: 0; color: #111; background: #fff; font-family: Georgia, 'Times New Roman', serif; line-height: 1.45; }}
+    .page {{ width: 100%; min-height: 9.9in; border: 2px solid #111; padding: 0.32in; }}
+    .brand {{ font-family: Arial, Helvetica, sans-serif; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; border-bottom: 1px solid #111; padding-bottom: 8px; margin-bottom: 16px; }}
+    h1 {{ font-family: Arial, Helvetica, sans-serif; font-size: 26px; margin: 0 0 6px; }}
+    h2 {{ font-family: Arial, Helvetica, sans-serif; font-size: 15px; margin: 0 0 18px; font-weight: 400; }}
     p {{ font-size: 12px; margin: 0 0 10px; }}
-    .section {{ border: 1px solid #222; padding: 14px; margin: 14px 0; }}
-    .label {{ font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; margin-bottom: 8px; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
+    .section {{ border: 1px solid #222; padding: 14px; margin: 14px 0; break-inside: avoid; }}
+    .label {{ font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; margin-bottom: 8px; }}
     .check-row {{ display: flex; gap: 10px; align-items: center; margin: 10px 0; }}
     .box {{ display: inline-block; width: 14px; height: 14px; border: 1px solid #111; }}
     .line, .write-line {{ display: block; border-bottom: 1px solid #111; min-height: 20px; flex: 1; }}
@@ -1558,25 +1601,381 @@ def _render_printable_html(product: dict, section_title: str, content: str) -> s
 </head>
 <body>
   <main class="page">
+    <div class="brand">Printable Digital Download</div>
     <h1>{section}</h1>
     <h2>{product_title}</h2>
     <section class="section">
       <div class="label">Instructions</div>
       {body or "<p>Use this printable page to plan, track, and review your next action.</p>"}
     </section>
-    <section class="section">
-      <div class="label">Action Checklist</div>
-      {checklist}
-    </section>
-    <section class="section">
-      <div class="label">Notes / Planning Space</div>
-      {note_lines}
-    </section>
+    <div class="grid">
+      <section class="section">
+        <div class="label">Action Checklist</div>
+        {checklist}
+      </section>
+      <section class="section">
+        <div class="label">Notes / Planning Space</div>
+        {note_lines}
+      </section>
+    </div>
     <div class="footer">Personal use unless the seller changes the license terms.</div>
   </main>
 </body>
 </html>
 """
+
+
+def _render_printable_cover_html(product: dict, content_data: dict) -> str:
+    product_title = html_lib.escape(str(product.get("title") or "Printable Pack"))
+    sections = content_data.get("sections") or []
+    section_list = "\n".join(
+        f"<li>{html_lib.escape(str(section.get('title') or 'Worksheet'))}</li>"
+        for section in sections
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{product_title} Cover</title>
+  <style>
+    @page {{ size: letter; margin: 0.55in; }}
+    body {{ margin: 0; color: #111; background: #fff; font-family: Arial, Helvetica, sans-serif; }}
+    .cover {{ min-height: 9.9in; border: 3px solid #111; padding: .55in; display: flex; flex-direction: column; justify-content: space-between; }}
+    .eyebrow {{ text-transform: uppercase; letter-spacing: .12em; font-size: 12px; border-bottom: 1px solid #111; padding-bottom: 12px; }}
+    h1 {{ font-size: 44px; line-height: 1.05; margin: 32px 0 20px; max-width: 8in; }}
+    .subtitle {{ font-size: 18px; max-width: 6.5in; }}
+    .includes {{ border: 1px solid #111; padding: 18px; margin-top: 28px; }}
+    li {{ margin: 8px 0; font-size: 14px; }}
+    .footer {{ font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
+  </style>
+</head>
+<body>
+  <main class="cover">
+    <section>
+      <div class="eyebrow">Printable planner pack</div>
+      <h1>{product_title}</h1>
+      <div class="subtitle">A practical printable download designed for focused planning, tracking, and follow-through.</div>
+      <div class="includes">
+        <strong>Included pages</strong>
+        <ul>{section_list or "<li>Printable planning pages</li>"}</ul>
+      </div>
+    </section>
+    <div class="footer">Personal use digital download</div>
+  </main>
+</body>
+</html>
+"""
+
+
+def _render_cover_preview_html(product: dict, artifact_map: dict[str, dict]) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    universal = listing.get("universal") or {}
+    title = html_lib.escape(str(product.get("title") or outline.get("product_title") or "Digital Product"))
+    tagline = html_lib.escape(str(universal.get("tagline") or outline.get("tagline") or "Printable digital download"))
+    format_text = html_lib.escape(str(product.get("production_format") or "digital download"))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cover Preview - {title}</title>
+  <style>
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #eceff3; font-family: Arial, Helvetica, sans-serif; color: #101820; }}
+    .mockup {{ width: 720px; max-width: calc(100vw - 40px); aspect-ratio: 4 / 5; background: #fff; box-shadow: 0 30px 80px rgba(0,0,0,.22); border: 1px solid #d8dde5; padding: 56px; display: flex; flex-direction: column; justify-content: space-between; }}
+    .kicker {{ text-transform: uppercase; letter-spacing: .14em; font-size: 13px; font-weight: 700; border-bottom: 2px solid #101820; padding-bottom: 14px; }}
+    h1 {{ font-size: 56px; line-height: 1.02; margin: 42px 0 20px; max-width: 620px; }}
+    .tagline {{ font-size: 20px; line-height: 1.35; max-width: 520px; }}
+    .format {{ font-size: 14px; text-transform: uppercase; letter-spacing: .1em; border: 1px solid #101820; padding: 10px 14px; display: inline-block; }}
+  </style>
+</head>
+<body>
+  <main class="mockup">
+    <section>
+      <div class="kicker">Ready-to-upload digital product</div>
+      <h1>{title}</h1>
+      <div class="tagline">{tagline}</div>
+    </section>
+    <div class="format">{format_text}</div>
+  </main>
+</body>
+</html>
+"""
+
+
+def _render_sales_preview_html(product: dict, listing_data: dict) -> str:
+    gumroad = listing_data.get("gumroad") or {}
+    universal = listing_data.get("universal") or {}
+    title = html_lib.escape(str(gumroad.get("title") or product.get("title") or "Digital Product"))
+    short = html_lib.escape(str(universal.get("short_description") or "A practical digital download built for immediate use."))
+    description = html_lib.escape(str(gumroad.get("description") or "")[:1400])
+    price = html_lib.escape(str(product.get("price") or ""))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sales Page Preview - {title}</title>
+  <style>
+    body {{ margin: 0; background: #f7f7f5; color: #161616; font-family: Arial, Helvetica, sans-serif; }}
+    main {{ width: min(980px, calc(100% - 40px)); margin: 48px auto; display: grid; grid-template-columns: .9fr 1.1fr; gap: 28px; }}
+    .cover {{ aspect-ratio: 4 / 5; background: #fff; border: 1px solid #222; box-shadow: 0 16px 40px rgba(0,0,0,.12); padding: 34px; display: flex; flex-direction: column; justify-content: space-between; }}
+    .cover h1 {{ font-size: 38px; line-height: 1.05; }}
+    .panel {{ background: #fff; border: 1px solid #ddd; padding: 28px; }}
+    h2 {{ font-size: 34px; margin: 0 0 10px; }}
+    .short {{ font-size: 18px; color: #444; margin-bottom: 18px; }}
+    .price {{ display: inline-block; border: 1px solid #111; padding: 10px 14px; margin: 18px 0; font-weight: 700; }}
+    p {{ line-height: 1.55; white-space: pre-wrap; }}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="cover"><div><strong>Digital Download</strong><h1>{title}</h1></div><div>Printable product preview</div></section>
+    <section class="panel">
+      <h2>{title}</h2>
+      <div class="short">{short}</div>
+      <div class="price">${price}</div>
+      <p>{description}</p>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def _build_gumroad_presentation_assets(product: dict, listing_data: dict) -> str:
+    gumroad = listing_data.get("gumroad") or {}
+    universal = listing_data.get("universal") or {}
+    tags = gumroad.get("tags") or []
+    if isinstance(tags, list):
+        tags = ", ".join(str(tag) for tag in tags)
+    return "\n".join([
+        f"# Gumroad Presentation Assets - {product.get('title')}",
+        "",
+        f"## Title\n\n{gumroad.get('title') or product.get('title')}",
+        "",
+        f"## Short Description\n\n{universal.get('short_description', '')}",
+        "",
+        f"## Price\n\n${product.get('price')}",
+        "",
+        f"## Tags\n\n{tags}",
+        "",
+        "## Preview Assets To Use",
+        "",
+        "- `preview/cover_preview.html` for cover direction",
+        "- `preview/sales_page_preview.html` for offer framing",
+        "- `pdf/printable_pack.pdf` as customer-facing file when acceptable",
+        "",
+        "## Upload Notes",
+        "",
+        "- Use the ZIP as the main Gumroad product file.",
+        "- Add mockup images manually before launch.",
+        "- Confirm personal-use license language before publishing.",
+    ])
+
+
+def _build_fiverr_gig_brief(product: dict, artifact_map: dict[str, dict]) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    return "\n".join([
+        f"# Fiverr Gig Brief - {product.get('title')}",
+        "",
+        "Use this only if outsourcing mockups, cover polish, or PDF styling. Do not give freelancers HYDRA credentials.",
+        "",
+        "## Project",
+        "",
+        f"Create polished marketplace preview images and optional PDF styling for: **{product.get('title')}**.",
+        "",
+        "## Audience",
+        "",
+        outline.get("buyer_persona", "Digital download buyers"),
+        "",
+        "## Core Promise",
+        "",
+        outline.get("core_pain_solved", "A practical printable product that saves time and improves clarity."),
+        "",
+        "## Deliverables To Request",
+        "",
+        "- 1 square cover image, 2000x2000 PNG",
+        "- 1 Etsy/Gumroad hero mockup, 2400x1600 PNG",
+        "- 3 preview images showing included printable pages",
+        "- Optional styled PDF export using the included HTML/PDF as source",
+        "",
+        "## Constraints",
+        "",
+        "- No trademarked characters or brand imitation.",
+        "- Keep text readable at thumbnail size.",
+        "- Do not claim medical, financial, legal, or guaranteed outcomes.",
+    ])
+
+
+def _build_mockup_cover_spec(product: dict, artifact_map: dict[str, dict]) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    content = _artifact_json(artifact_map.get("product_content"))
+    section_titles = [str(section.get("title")) for section in content.get("sections", []) if section.get("title")]
+    return "\n".join([
+        f"# Mockup And Cover Specification - {product.get('title')}",
+        "",
+        "## Cover Direction",
+        "",
+        f"- Main title: {product.get('title')}",
+        f"- Subtitle angle: {outline.get('tagline', 'Printable digital download')}",
+        "- Style: clean, high-contrast, practical, marketplace thumbnail readable",
+        "- Avoid: fake app screenshots, fake reviews, medical/therapy claims, brand imitation",
+        "",
+        "## Preview Image Shot List",
+        "",
+        "1. Cover image with product title and format",
+        "2. Flat lay or stacked-pages mockup showing the printable pack",
+        "3. Close-up of the most valuable worksheet/page",
+        "4. Before/after value image: messy planning vs organized planner",
+        "5. What's included image listing the pages",
+        "",
+        "## Pages To Feature",
+        "",
+        *(f"- {title}" for title in section_titles[:8]),
+        "",
+        "## Export Requirements",
+        "",
+        "- Square: 2000x2000 PNG",
+        "- Landscape: 2400x1600 PNG",
+        "- Keep source editable if a designer is involved",
+    ])
+
+
+def _build_perceived_value_stack(product: dict, content_data: dict, listing_data: dict) -> str:
+    sections = content_data.get("sections") or []
+    etsy = listing_data.get("etsy") or {}
+    return "\n".join([
+        f"# Perceived Value Stack - {product.get('title')}",
+        "",
+        f"Suggested price: ${product.get('price')}",
+        "",
+        "## What The Buyer Gets",
+        "",
+        *(f"- {section.get('title', 'Printable page')}" for section in sections),
+        "",
+        "## Value Framing",
+        "",
+        "- Saves planning/setup time",
+        "- Gives the buyer a finished, printable workflow",
+        "- Works immediately after download",
+        "- Includes source/preview files for operator review",
+        "",
+        "## Etsy Search Angle",
+        "",
+        etsy.get("title", ""),
+        "",
+        "## Listing Enhancements Still Needed",
+        "",
+        "- Product mockup images",
+        "- Thumbnail-optimized cover",
+        "- Final policy and typo review",
+    ])
+
+
+def _write_printable_pdf(path: Path, product: dict, content_data: dict) -> None:
+    title = str(product.get("title") or "Printable Pack")
+    sections = content_data.get("sections") or []
+    pages: list[list[str]] = []
+    cover_lines = [
+        title,
+        "",
+        str(product.get("production_format") or "Printable digital download"),
+        "",
+        "Included pages:",
+        *[f"- {section.get('title', 'Printable page')}" for section in sections],
+        "",
+        "Personal use unless the seller changes the license terms.",
+    ]
+    pages.append(_wrap_pdf_lines(cover_lines, width=78))
+    for section in sections:
+        lines = [
+            str(section.get("title") or "Printable Page"),
+            "",
+            "Instructions:",
+            str(section.get("content") or ""),
+            "",
+            "Action Checklist:",
+            "[ ] ________________________________________________",
+            "[ ] ________________________________________________",
+            "[ ] ________________________________________________",
+            "[ ] ________________________________________________",
+            "",
+            "Notes:",
+            "____________________________________________________",
+            "____________________________________________________",
+            "____________________________________________________",
+            "____________________________________________________",
+        ]
+        pages.append(_wrap_pdf_lines(lines, width=82))
+    _write_basic_pdf(path, pages)
+
+
+def _wrap_pdf_lines(lines: list[str], width: int) -> list[str]:
+    wrapped: list[str] = []
+    for line in lines:
+        if not line:
+            wrapped.append("")
+            continue
+        parts = textwrap.wrap(line, width=width) or [line]
+        wrapped.extend(parts)
+    return wrapped
+
+
+def _write_basic_pdf(path: Path, pages: list[list[str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    objects: list[bytes] = []
+    page_refs: list[int] = []
+    font_obj = 3
+    for page_lines in pages:
+        content_obj = len(objects) + 4
+        page_obj = content_obj + 1
+        stream = _pdf_page_stream(page_lines)
+        objects.append(
+            f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream"
+        )
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_obj} 0 R >> >> /Contents {content_obj} 0 R >>".encode("ascii")
+        )
+        page_refs.append(page_obj)
+    base_objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{' '.join(f'{ref} 0 R' for ref in page_refs)}] /Count {len(page_refs)} >>".encode("ascii"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    all_objects = base_objects + objects
+    offsets: list[int] = []
+    output = bytearray(b"%PDF-1.4\n")
+    for index, obj in enumerate(all_objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii"))
+        output.extend(obj)
+        output.extend(b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(all_objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets:
+        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.extend(
+        f"trailer\n<< /Size {len(all_objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
+    )
+    path.write_bytes(bytes(output))
+
+
+def _pdf_page_stream(lines: list[str]) -> bytes:
+    commands = ["BT", "/F1 12 Tf", "72 740 Td", "16 TL"]
+    for raw_line in lines[:42]:
+        line = _pdf_escape(raw_line[:110])
+        commands.append(f"({line}) Tj")
+        commands.append("T*")
+    commands.append("ET")
+    return "\n".join(commands).encode("latin-1", errors="replace")
+
+
+def _pdf_escape(text: str) -> str:
+    return (
+        text.encode("latin-1", errors="replace").decode("latin-1")
+        .replace("\\", "\\\\")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+    )
 
 
 def _build_package_readme(product: dict, artifact_map: dict[str, dict]) -> str:
@@ -1586,11 +1985,14 @@ def _build_package_readme(product: dict, artifact_map: dict[str, dict]) -> str:
         suggested_marketplaces.insert(0, "Etsy")
     included = [
         "- `source/` Markdown source files generated from HYDRA artifacts",
+        "- `preview/` cover and sales-page HTML previews for marketplace presentation",
+        "- `presentation/` Gumroad/Fiverr/mockup/value-stack briefs",
         "- `manifest.json` package metadata",
         "- `marketplace_checklist.md` upload checklist",
     ]
     if _is_printable_format(product.get("production_format", "")):
         included.append("- `printable/` clean letter-size printable HTML files")
+        included.append("- `pdf/printable_pack.pdf` simple PDF export")
     return "\n".join([
         f"# {product.get('title')}",
         "",
@@ -1603,7 +2005,7 @@ def _build_package_readme(product: dict, artifact_map: dict[str, dict]) -> str:
         "",
         "## Usage Instructions",
         "",
-        "Open the HTML files in a browser and print to PDF when a PDF upload is needed. Review every file before publishing.",
+        "Use the ZIP for marketplace upload. Review the printable HTML and PDF files before publishing. Use the preview and presentation assets to create listing images/mockups manually.",
         "",
         "## Customer Instructions",
         "",
@@ -1642,7 +2044,14 @@ def _build_marketplace_checklist(product: dict, artifact_map: dict[str, dict]) -
         "## Files To Upload",
         "",
         f"- `product_{product.get('id')}.zip`",
-        "- Printable HTML files can be printed to PDF manually if Etsy/Gumroad requires PDFs.",
+        "- `pdf/printable_pack.pdf` when a direct PDF upload is preferred.",
+        "- Printable HTML files can still be printed to PDF manually if layout review requires it.",
+        "",
+        "## Presentation Assets",
+        "",
+        "- Cover direction: `preview/cover_preview.html`",
+        "- Sales page framing: `preview/sales_page_preview.html`",
+        "- Gumroad/Fiverr/mockup briefs: `presentation/`",
         "",
         "## Required Human Review",
         "",

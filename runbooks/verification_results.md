@@ -121,3 +121,19 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | Product 43 source Markdown | PASS — generated under `products/product_43/source/` |
 | Product 43 manifest/checklist/README | PASS |
 | Product 43 `product_files` package row | PASS |
+
+---
+
+## Sprint 1.9 — 2026-05-10
+
+| Check | Result |
+|---|---|
+| `./scripts/preflight_check.sh` | PASS |
+| `bash scripts/verify_sprint19.sh` | PASS — 9/9 |
+| `LIVE=1 bash scripts/verify_sprint19.sh` | PASS — 22/22 |
+| `bash scripts/verify_sprint18.sh` | PASS — 7/7 |
+| `LIVE=1 bash scripts/verify_sprint18.sh` | PASS — 17/17 |
+| Product 43 PDF export | PASS — `products/product_43/pdf/printable_pack.pdf` starts with `%PDF-` |
+| Product 43 cover/sales previews | PASS |
+| Product 43 Gumroad/Fiverr/mockup/value presentation docs | PASS |
+| Product 43 manifest | PASS — `package_version` is `1.9`; tracks PDF, preview, and presentation assets |

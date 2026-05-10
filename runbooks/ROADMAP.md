@@ -184,6 +184,27 @@ Already shipped: file tracking, artifact export, Gumroad URL warnings, launch da
 
 ---
 
+### Sprint 1.9 — Commercial Presentation Packaging
+
+- **Objective:** Make generated product packages feel commercially real and upload-ready.
+- **Status:** Complete 2026-05-10.
+- **Features:**
+  - Cover preview HTML: `preview/cover_preview.html`.
+  - Sales-page preview HTML: `preview/sales_page_preview.html`.
+  - Simple local PDF export: `pdf/printable_pack.pdf`.
+  - Gumroad presentation asset brief.
+  - Fiverr outsourcing brief.
+  - Mockup/cover specification.
+  - Perceived value stack document.
+  - Richer `manifest.json` tracking preview, PDF, and presentation assets.
+  - Product edit copy updated to surface PDF/preview/presentation packaging.
+- **Dependencies:** Sprint 1.8 package builder.
+- **Risks:** PDF export is simple and text-based; preview assets are HTML specs, not generated PNG/JPG images. Mitigation: package checklist still requires human image/mockup review.
+- **Acceptance criteria:** `bash scripts/verify_sprint19.sh` and `LIVE=1 bash scripts/verify_sprint19.sh` pass; product 43 package includes PDF, previews, presentation docs, and manifest metadata.
+- **Executor:** Codex-safe.
+
+---
+
 ### Sprint 2.1 — Reddit collector + scheduler
 
 - **Objective:** Two real sources running on a schedule produce the cross-source-confirmation signal that mock candidates fake.

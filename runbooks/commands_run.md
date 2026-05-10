@@ -93,6 +93,30 @@ curl -si -u admin:change-me -X POST http://localhost:8000/products/43/package --
 find products/product_43 -maxdepth 3 -type f | sort
 ```
 
+## Sprint 1.9
+
+```bash
+cd /home/jb/dev/hydra
+git status --short
+git log --oneline -5
+./scripts/preflight_check.sh
+bash scripts/verify_sprint18.sh
+sed -n '1200,1520p' app/main.py
+sed -n '1,240p' app/templates/product_edit.html
+python3 -m py_compile app/main.py app/db.py app/llm.py
+chmod +x scripts/verify_sprint19.sh
+bash scripts/verify_sprint19.sh
+docker compose up -d --build
+./scripts/preflight_check.sh
+LIVE=1 bash scripts/verify_sprint19.sh
+curl -si -u admin:change-me -X POST http://localhost:8000/products/43/package --max-redirs 0
+find products/product_43 -maxdepth 3 -type f | sort
+python3 -m json.tool products/product_43/manifest.json
+head -c 5 products/product_43/pdf/printable_pack.pdf | od -An -tx1
+bash scripts/verify_sprint18.sh
+LIVE=1 bash scripts/verify_sprint18.sh
+```
+
 
 ## Sprint 1.3
 
