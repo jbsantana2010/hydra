@@ -140,6 +140,8 @@ class LlmCall(Base):
     error = Column(Text)
     # Sprint 1.5.1 — structured error classification for operator visibility
     error_type = Column(Text)
+    # Raw malformed output is kept for debugging structured-output failures.
+    raw_response = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
 
 
@@ -286,6 +288,7 @@ def _apply_one_shot_migrations() -> None:
         "ALTER TABLE product_artifacts ADD COLUMN IF NOT EXISTS channel_tag TEXT",
         # Sprint 1.5.1 — structured error type for LLM call visibility
         "ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS error_type TEXT",
+        "ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS raw_response TEXT",
         # Sprint 1.6 — listings table safety net (catches DBs stamped at 0002
         # before migration 0002 actually ran, e.g. pre-Alembic stamp-to-head path)
         """CREATE TABLE IF NOT EXISTS listings (

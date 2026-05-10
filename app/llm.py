@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -90,6 +91,7 @@ def call_llm_json(
 
         errors: list[str] = []
         for provider in providers:
+            content: str | None = None
             try:
                 content, usage = _call_provider(
                     provider,
@@ -99,9 +101,10 @@ def call_llm_json(
                     completion_tokens,
                     timeout_seconds,
                 )
-                data = json.loads(content)
-                if not isinstance(data, dict):
-                    raise ValueError("JSON response was not an object")
+                try:
+                    data = _parse_json_object(content)
+                except ValueError as exc:
+                    raise ValueError(_format_json_parse_error(exc, content)) from exc
                 actual_prompt = int(usage.get("prompt_tokens") or prompt_tokens)
                 actual_completion = int(usage.get("completion_tokens") or _estimate_tokens(content))
                 cost = _estimate_cost(provider.name, actual_prompt, actual_completion)
@@ -133,6 +136,7 @@ def call_llm_json(
                     status="failed",
                     error=str(exc)[:1000],
                     error_type=_classify_error(exc),
+                    raw_response=content if "content" in locals() else None,
                 )
 
         raise LlmFailed("; ".join(errors) or "LLM providers failed")
@@ -207,7 +211,7 @@ def _call_anthropic(
         "messages": [
             {
                 "role": "user",
-                "content": f"{user_prompt}\n\nReturn only JSON matching this schema hint:\n{json.dumps(schema_hint)}",
+                "content": _json_only_user_prompt(user_prompt, schema_hint),
             }
         ],
     }
@@ -245,7 +249,7 @@ def _call_openai(
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": f"{user_prompt}\n\nReturn only JSON matching this schema hint:\n{json.dumps(schema_hint)}",
+                "content": _json_only_user_prompt(user_prompt, schema_hint),
             },
         ],
     }
@@ -280,9 +284,171 @@ def _completion_budget_for(purpose: str) -> int:
         return 180
     if purpose == "product_prefill":
         return 360
+    if purpose == "outline":
+        return 1200
+    if purpose == "product_content":
+        return 3500
+    if purpose == "listing_copy":
+        return 2200
+    if purpose == "qa_review":
+        return 1400
+    if purpose == "distribution_post":
+        return 2000
     if purpose in ("market_pattern_extraction", "market_opportunity_generation"):
         return 1600
     return 300
+
+
+def _json_only_user_prompt(user_prompt: str, schema_hint: dict) -> str:
+    return (
+        f"{user_prompt}\n\n"
+        "Return exactly one valid JSON object matching this schema hint.\n"
+        "Do not wrap it in markdown fences. Do not include prose before or after the object.\n"
+        "Escape newlines inside string values as \\n. Escape double quotes inside string values.\n"
+        "Finish all strings, arrays, and objects before stopping.\n"
+        f"Schema hint:\n{json.dumps(schema_hint, ensure_ascii=True)}"
+    )
+
+
+def _parse_json_object(content: str) -> dict:
+    """Parse provider JSON while tolerating common model wrappers.
+
+    This deliberately stays conservative: it accepts valid JSON, markdown-fenced
+    JSON, or the first complete JSON object embedded in prose. It then performs
+    one local repair pass for common formatting defects, such as literal newlines
+    inside strings and trailing commas. Truncated JSON still fails.
+    """
+    candidates = [
+        content,
+        _strip_markdown_fence(content),
+        _extract_json_object_text(content),
+    ]
+
+    first_error: Exception | None = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return _loads_json_object(candidate)
+        except (json.JSONDecodeError, ValueError) as exc:
+            first_error = first_error or exc
+
+    repaired = _repair_json_text(_extract_json_object_text(content) or _strip_markdown_fence(content))
+    if repaired:
+        try:
+            return _loads_json_object(repaired)
+        except (json.JSONDecodeError, ValueError) as exc:
+            first_error = first_error or exc
+
+    raise ValueError(str(first_error or "No JSON object found"))
+
+
+def _loads_json_object(text: str) -> dict:
+    data = json.loads(text.strip())
+    if not isinstance(data, dict):
+        raise ValueError("JSON response was not an object")
+    return data
+
+
+def _strip_markdown_fence(text: str) -> str:
+    stripped = text.strip()
+    match = re.fullmatch(r"```(?:json|JSON)?\s*(.*?)\s*```", stripped, flags=re.DOTALL)
+    return match.group(1).strip() if match else stripped
+
+
+def _extract_json_object_text(text: str) -> str | None:
+    cleaned = _strip_markdown_fence(text)
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(cleaned):
+        if char != "{":
+            continue
+        try:
+            obj, end = decoder.raw_decode(cleaned[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return cleaned[index : index + end].strip()
+    return _balanced_object_slice(cleaned)
+
+
+def _balanced_object_slice(text: str) -> str | None:
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1].strip()
+    return None
+
+
+def _repair_json_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    text = _strip_markdown_fence(text)
+    text = text.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    return _escape_control_chars_inside_strings(text)
+
+
+def _escape_control_chars_inside_strings(text: str) -> str:
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                output.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                output.append(char)
+                escaped = True
+                continue
+            if char == '"':
+                in_string = False
+                output.append(char)
+                continue
+            if char == "\n":
+                output.append("\\n")
+                continue
+            if char == "\r":
+                output.append("\\n")
+                continue
+            if char == "\t":
+                output.append("\\t")
+                continue
+            output.append(char)
+            continue
+        if char == '"':
+            in_string = True
+        output.append(char)
+    return "".join(output)
+
+
+def _format_json_parse_error(exc: Exception, content: str) -> str:
+    preview = (content or "").replace("\n", "\\n")[:500]
+    return (
+        f"Invalid JSON from provider after cleanup/repair: {exc}. "
+        f"Raw output logged for debugging. Preview: {preview}"
+    )
 
 
 def _estimate_cost(provider: str, prompt_tokens: int, completion_tokens: int) -> Decimal:
@@ -338,7 +504,7 @@ def _classify_error(exc: Exception) -> str:
         return "provider_5xx"
     if "timeout" in msg:
         return "timeout"
-    if any(w in msg for w in ("json", "not an object", "decode")):
+    if any(w in msg for w in ("json", "not an object", "decode", "unterminated string", "expecting value")):
         return "bad_json"
     if "kill switch" in msg:
         return "kill_switch"
@@ -387,6 +553,7 @@ def _log_call(
     status: str,
     error: str | None,
     error_type: str | None = None,
+    raw_response: str | None = None,
 ) -> None:
     db.add(
         LlmCall(
@@ -400,6 +567,7 @@ def _log_call(
             status=status,
             error=error,
             error_type=error_type,
+            raw_response=raw_response[:12000] if raw_response else None,
         )
     )
     db.flush()
