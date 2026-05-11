@@ -58,15 +58,23 @@ def make_kit_llm_caller(db) -> Callable:
     from llm import call_llm_json, LlmBlocked, LlmFailed  # noqa: F401 (re-exported for callers)
 
     def _call(system_prompt: str, user_prompt: str) -> list:
-        data = call_llm_json(
-            db=db,
-            purpose="kit_doc_sections",
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            schema_hint=_SCHEMA_HINT,
-            max_cost_usd=0.30,
-            timeout_seconds=90,
-        )
+        try:
+            data = call_llm_json(
+                db=db,
+                purpose="kit_doc_sections",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                schema_hint=_SCHEMA_HINT,
+                # Keep this safely below HYDRA_LLM_PER_CALL_CAP_USD.
+                max_cost_usd=0.18,
+                timeout_seconds=90,
+            )
+            if hasattr(db, "commit"):
+                db.commit()
+        except Exception:
+            if hasattr(db, "commit"):
+                db.commit()
+            raise
         sections = data.get("sections")
         if not isinstance(sections, list):
             raise ValueError(

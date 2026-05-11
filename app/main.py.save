@@ -1,0 +1,3487 @@
+from __future__ import annotations
+
+import base64
+import csv
+import html as html_lib
+import io
+import json
+import os
+import re
+import secrets
+import textwrap
+import zipfile
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
+
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import desc, func, select
+from kit_routes import kit_router
+
+from db import (
+    Approval,
+    Listing,
+    LlmCall,
+    MarketPattern,
+    MarketResearchItem,
+    MarketResearchRun,
+    OpportunityCandidate,
+    Product,
+    ProductArtifact,
+    ProductFile,
+    RevenueEvent,
+    SystemActionBlocked,
+    assert_system_can_act,
+    get_daily_budget,
+    init_db,
+    is_kill_switch_active,
+    session_scope,
+    set_flag_value,
+)
+from llm import LlmBlocked, LlmFailed, call_llm_json, get_today_llm_spend
+from ruflo_bridge import build_ruflo_listing_prompt, build_ruflo_product_prompt
+from signal_engine import calculate_score, mock_candidates
+
+EXPORT_ROOT = Path(os.getenv("HYDRA_EXPORT_ROOT", "exports"))
+PRODUCT_ROOT = Path(os.getenv("HYDRA_PRODUCT_ROOT", "products"))
+
+app = FastAPI(title="HYDRA Console", version="0.1.0")
+templates = Jinja2Templates(directory="templates")
+
+
+def _from_json(value: str | None):
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+
+templates.env.filters["from_json"] = _from_json
+
+PRODUCT_STATUSES = ["draft", "generated", "listed", "live", "paused", "archived"]
+ARTIFACT_TYPES = ["outline", "product_content", "listing_copy", "qa_review", "distribution_post"]
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if request.url.path == "/health":
+        return await call_next(request)
+
+    expected_user = os.getenv("HYDRA_BASIC_USER", "admin")
+    expected_pass = os.getenv("HYDRA_BASIC_PASS", "change-me")
+    auth_header = request.headers.get("authorization", "")
+
+    if _valid_basic_auth(auth_header, expected_user, expected_pass):
+        return await call_next(request)
+
+    return Response(
+        "Authentication required",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="HYDRA"'},
+    )
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+
+
+@app.get("/health")
+def health() -> dict:
+    return {"status": "healthy", "service": "hydra-console"}
+
+
+@app.get("/")
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/opportunities", status_code=303)
+
+
+@app.get("/opportunities")
+def opportunities(request: Request):
+    with session_scope() as session:
+        candidates = session.scalars(
+            select(OpportunityCandidate).order_by(desc(OpportunityCandidate.score), desc(OpportunityCandidate.created_at))
+        ).all()
+        approved = [candidate for candidate in candidates if candidate.status == "approved"]
+        product_prompt = build_ruflo_product_prompt(_model_to_dict(approved[0])) if approved else None
+        return templates.TemplateResponse(
+            "opportunities.html",
+            {
+                "request": request,
+                "candidates": candidates,
+                "product_prompt": product_prompt,
+                "kill_switch_active": is_kill_switch_active(),
+            },
+        )
+
+
+@app.post("/opportunities/mock-scan")
+def mock_scan():
+    candidates = mock_candidates()
+    inserted = 0
+    skipped = 0
+    with session_scope() as session:
+        for candidate in candidates:
+            exists = session.scalar(
+                select(OpportunityCandidate.id).where(
+                    OpportunityCandidate.source == candidate["source"],
+                    OpportunityCandidate.topic == candidate["topic"],
+                    OpportunityCandidate.vertical == candidate["vertical"],
+                )
+            )
+            if exists:
+                skipped += 1
+                continue
+            session.add(OpportunityCandidate(**candidate))
+            inserted += 1
+    return {"inserted": inserted, "skipped": skipped, "message": "Mock SIGNAL scan complete"}
+
+
+@app.post("/opportunities/{candidate_id}/approve")
+def approve_opportunity(candidate_id: int):
+    """Approve an opportunity AND auto-create a prefilled draft product.
+
+    Operator can edit title/format/notes/price before generation. This is the
+    automation seam: the approval click should leave the operator with a
+    populated draft, not a blank form.
+    """
+    with session_scope() as session:
+        candidate = session.get(OpportunityCandidate, candidate_id)
+        if not candidate:
+            raise HTTPException(status_code=404, detail="Opportunity not found")
+
+        already_approved = candidate.status == "approved"
+        if not already_approved:
+            candidate.status = "approved"
+            session.add(
+                Approval(
+                    entity_type="opportunity_candidate",
+                    entity_id=candidate_id,
+                    decision="approved",
+                )
+            )
+
+        product = session.scalar(
+            select(Product).where(Product.opportunity_id == candidate_id)
+        )
+        if product is None:
+            defaults = build_default_product_fields(candidate, session)
+            product = Product(
+                opportunity_id=candidate_id,
+                title=defaults["title"],
+                production_format=defaults["production_format"],
+                price=defaults["price"],
+                notes=defaults["notes"],
+                status="draft",
+            )
+            session.add(product)
+            session.flush()  # populate product.id for redirect
+
+        product_id = product.id
+
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.get("/products")
+def products(request: Request):
+    with session_scope() as session:
+        product_rows = session.scalars(select(Product).order_by(desc(Product.created_at))).all()
+        approved_candidates = session.scalars(
+            select(OpportunityCandidate).where(OpportunityCandidate.status == "approved").order_by(desc(OpportunityCandidate.score))
+        ).all()
+        listing_prompt = build_ruflo_listing_prompt(_model_to_dict(product_rows[0])) if product_rows else None
+        return templates.TemplateResponse(
+            "products.html",
+            {
+                "request": request,
+                "products": product_rows,
+                "approved_candidates": approved_candidates,
+                "listing_prompt": listing_prompt,
+            },
+        )
+
+
+@app.get("/products/{product_id}/edit")
+def edit_product(
+    request: Request,
+    product_id: int,
+    flash: str = "",
+    step: str = "",
+    msg: str = "",
+    provider: str = "",
+    model: str = "",
+    cost: str = "",
+):
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        artifacts = session.scalars(
+            select(ProductArtifact)
+            .where(ProductArtifact.product_id == product_id)
+            .order_by(desc(ProductArtifact.created_at))
+        ).all()
+        files = session.scalars(
+            select(ProductFile)
+            .where(ProductFile.product_id == product_id)
+            .order_by(desc(ProductFile.created_at))
+        ).all()
+        readiness_report = _load_readiness_report(product_id)
+        url_check = check_gumroad_url(product)
+        generation_steps = ("outline", "product_content", "listing_copy", "qa_review", "distribution_post")
+        generation_status = {
+            step_name: _latest_artifact(session, product_id, step_name)
+            for step_name in generation_steps
+        }
+        listings = session.scalars(
+            select(Listing)
+            .where(Listing.product_id == product_id)
+            .order_by(Listing.platform)
+        ).all()
+        # Recent LLM calls (last 5) for "Latest Action" section — single-operator
+        # system so these will almost always belong to this product's last generation.
+        recent_llm_calls = session.scalars(
+            select(LlmCall).order_by(desc(LlmCall.created_at)).limit(5)
+        ).all()
+        # Build flash banner context
+        flash_banner = None
+        if flash == "success":
+            parts = [msg or f"✓ Generated {step} successfully."]
+            if provider:
+                parts.append(f"Provider: {provider}")
+                if model:
+                    parts.append(f"({model})")
+            if cost:
+                parts.append(f"Cost: ${cost}")
+            flash_banner = {"level": "success", "message": " ".join(parts)}
+        elif flash == "error":
+            flash_banner = {"level": "error", "message": f"✗ {msg or 'Generation failed.'}"}
+        elif flash == "blocked":
+            flash_banner = {"level": "warn", "message": f"⊘ {msg or 'Action blocked.'}"}
+        return templates.TemplateResponse(
+            "product_edit.html",
+            {
+                "request": request,
+                "product": product,
+                "artifacts": artifacts,
+                "files": files,
+                "statuses": PRODUCT_STATUSES,
+                "url_check": url_check,
+                "generation_status": generation_status,
+                "listings": listings,
+                "recent_llm_calls": recent_llm_calls,
+                "flash_banner": flash_banner,
+                "readiness_report": readiness_report,
+            },
+        )
+
+
+@app.post("/products/{product_id}/edit")
+def update_product(
+    product_id: int,
+    title: str = Form(...),
+    production_format: str = Form(""),
+    price: Decimal = Form(Decimal("19")),
+    status: str = Form("draft"),
+    gumroad_url: str = Form(""),
+    notes: str = Form(""),
+):
+    if status not in PRODUCT_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid product status")
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        product.title = title
+        product.production_format = production_format
+        product.price = price
+        product.status = status
+        product.gumroad_url = gumroad_url
+        product.notes = notes
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.post("/products")
+def create_product(
+    opportunity_id: int = Form(...),
+    title: str = Form(...),
+    production_format: str = Form(""),
+    price: Decimal = Form(Decimal("19")),
+    notes: str = Form(""),
+):
+    with session_scope() as session:
+        candidate = session.get(OpportunityCandidate, opportunity_id)
+        if not candidate:
+            raise HTTPException(status_code=404, detail="Opportunity not found")
+        product = Product(
+            opportunity_id=opportunity_id,
+            title=title,
+            production_format=production_format or candidate.production_format,
+            price=price,
+            notes=notes,
+            status="draft",
+        )
+        session.add(product)
+    return RedirectResponse(url="/products", status_code=303)
+
+
+@app.get("/products/{product_id}/artifacts/new")
+def new_artifact(request: Request, product_id: int):
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return templates.TemplateResponse(
+            "artifact_new.html",
+            {
+                "request": request,
+                "product": product,
+                "artifact_types": ARTIFACT_TYPES,
+            },
+        )
+
+
+@app.post("/products/{product_id}/artifacts")
+def create_artifact(
+    product_id: int,
+    artifact_type: str = Form(...),
+    title: str = Form(""),
+    content: str = Form(...),
+    source: str = Form("ruflo"),
+):
+    if artifact_type not in ARTIFACT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid artifact type")
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        session.add(
+            ProductArtifact(
+                product_id=product_id,
+                artifact_type=artifact_type,
+                title=title,
+                content=content,
+                source=source or "ruflo",
+            )
+        )
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.get("/revenue")
+def revenue(request: Request):
+    with session_scope() as session:
+        events = session.scalars(select(RevenueEvent).order_by(desc(RevenueEvent.created_at))).all()
+        products = session.scalars(select(Product).order_by(Product.title)).all()
+        total = session.scalar(select(func.coalesce(func.sum(RevenueEvent.amount), 0))) or 0
+        by_product_rows = session.execute(
+            select(
+                Product.id,
+                Product.title,
+                func.coalesce(func.sum(RevenueEvent.amount), 0).label("total"),
+            )
+            .outerjoin(RevenueEvent, RevenueEvent.product_id == Product.id)
+            .group_by(Product.id, Product.title)
+            .order_by(Product.title)
+        ).all()
+        return templates.TemplateResponse(
+            "revenue.html",
+            {
+                "request": request,
+                "events": events,
+                "products": products,
+                "total": total,
+                "by_product_rows": by_product_rows,
+            },
+        )
+
+
+@app.post("/revenue")
+def create_revenue_event(
+    product_id: int = Form(...),
+    marketplace: str = Form("gumroad"),
+    amount: Decimal = Form(...),
+    currency: str = Form("USD"),
+    event_type: str = Form("sale"),
+    notes: str = Form(""),
+    source_attribution: str = Form(""),
+    channel_tag: str = Form(""),
+):
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        session.add(
+            RevenueEvent(
+                product_id=product_id,
+                marketplace=marketplace or "gumroad",
+                amount=amount,
+                currency=currency or "USD",
+                event_type=event_type or "sale",
+                notes=notes,
+                source_attribution=(source_attribution or "").strip() or None,
+                channel_tag=(channel_tag or "").strip().lower() or None,
+            )
+        )
+    return RedirectResponse(url="/revenue", status_code=303)
+
+
+@app.get("/settings")
+def settings(request: Request):
+    with session_scope() as session:
+        recent_llm_calls = session.scalars(
+            select(LlmCall).order_by(desc(LlmCall.created_at)).limit(15)
+        ).all()
+        today_llm_spend = get_today_llm_spend(session)
+        return templates.TemplateResponse(
+            "settings.html",
+            {
+                "request": request,
+                "kill_switch_active": is_kill_switch_active(),
+                "daily_budget": get_daily_budget(),
+                "today_llm_spend": today_llm_spend,
+                "recent_llm_calls": recent_llm_calls,
+            },
+        )
+
+
+@app.post("/settings/kill-switch")
+def update_kill_switch(enabled: str = Form("false")):
+    set_flag_value("hydra:kill", "true" if enabled == "true" else "false")
+    return RedirectResponse(url="/settings", status_code=303)
+
+
+@app.post("/settings/budget")
+def update_budget(daily_budget_usd: Decimal = Form(...)):
+    if daily_budget_usd < 0:
+        raise HTTPException(status_code=400, detail="Budget cannot be negative")
+    set_flag_value("daily_budget_usd", str(daily_budget_usd))
+    return RedirectResponse(url="/settings", status_code=303)
+
+
+def _model_to_dict(model) -> dict:
+    return {column.name: getattr(model, column.name) for column in model.__table__.columns}
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.7 — Marketplace Intelligence v1
+# ---------------------------------------------------------------------------
+
+
+@app.get("/market-research")
+def market_research_list(request: Request, flash: str = "", msg: str = ""):
+    with session_scope() as session:
+        run_rows = session.scalars(
+            select(MarketResearchRun).order_by(desc(MarketResearchRun.created_at))
+        ).all()
+        pattern_counts = {
+            run.id: session.scalar(
+                select(func.count(MarketPattern.id)).where(MarketPattern.run_id == run.id)
+            ) or 0
+            for run in run_rows
+        }
+        item_counts = {run.id: run.item_count or 0 for run in run_rows}
+        runs = [_model_to_dict(run) for run in run_rows]
+
+    return templates.TemplateResponse(
+        "market_research_list.html",
+        {
+            "request": request,
+            "runs": runs,
+            "pattern_counts": pattern_counts,
+            "item_counts": item_counts,
+            "flash_banner": _flash_banner(flash, msg),
+        },
+    )
+
+
+@app.get("/market-research/new")
+def market_research_new(request: Request):
+    return templates.TemplateResponse(
+        "market_research_detail.html",
+        {
+            "request": request,
+            "run": None,
+            "items": [],
+            "patterns": [],
+            "page": 1,
+            "page_size": 25,
+            "total_pages": 1,
+            "total_items": 0,
+            "flash_banner": None,
+        },
+    )
+
+
+@app.post("/market-research")
+def market_research_create(
+    label: str = Form(...),
+    category: str = Form(""),
+    query: str = Form(""),
+    notes: str = Form(""),
+):
+    with session_scope() as session:
+        run = MarketResearchRun(
+            label=label.strip(),
+            category=category.strip() or None,
+            query=query.strip() or None,
+            notes=notes.strip() or None,
+        )
+        session.add(run)
+        session.flush()
+        run_id = run.id
+    return RedirectResponse(url=f"/market-research/{run_id}", status_code=303)
+
+
+@app.get("/market-research/{run_id}")
+def market_research_detail(
+    request: Request,
+    run_id: int,
+    flash: str = "",
+    msg: str = "",
+    page: int = 1,
+):
+    page = max(1, page)
+    page_size = 25
+    offset = (page - 1) * page_size
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        item_rows = session.scalars(
+            select(MarketResearchItem)
+            .where(MarketResearchItem.run_id == run_id)
+            .order_by(MarketResearchItem.id)
+            .offset(offset)
+            .limit(page_size)
+        ).all()
+        total_items = session.scalar(
+            select(func.count(MarketResearchItem.id)).where(MarketResearchItem.run_id == run_id)
+        ) or 0
+        pattern_rows = session.scalars(
+            select(MarketPattern)
+            .where(MarketPattern.run_id == run_id)
+            .order_by(MarketPattern.pattern_type, MarketPattern.id)
+        ).all()
+        run_data = _model_to_dict(run)
+        items = [_model_to_dict(item) for item in item_rows]
+        patterns = [_model_to_dict(pattern) for pattern in pattern_rows]
+
+    return templates.TemplateResponse(
+        "market_research_detail.html",
+        {
+            "request": request,
+            "run": run_data,
+            "items": items,
+            "patterns": patterns,
+            "flash_banner": _flash_banner(flash, msg),
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "total_pages": max(1, -(-total_items // page_size)),
+        },
+    )
+
+
+@app.post("/market-research/{run_id}/import-csv")
+async def market_research_import_csv(run_id: int, file: UploadFile = File(...)):
+    contents = await file.read()
+    text = contents.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    imported = 0
+    errors: list[str] = []
+
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        for i, row in enumerate(reader, start=1):
+            title = (row.get("title") or "").strip()
+            if not title:
+                errors.append(f"Row {i}: missing title")
+                continue
+            session.add(
+                MarketResearchItem(
+                    run_id=run_id,
+                    title=title,
+                    shop_name=(row.get("shop_name") or "").strip() or None,
+                    price_cents=_parse_price_cents(row.get("price")),
+                    currency=(row.get("currency") or "USD").strip().upper() or "USD",
+                    rating=_parse_float(row.get("rating")),
+                    review_count=_parse_int(row.get("review_count")),
+                    tags=(row.get("tags") or "").strip() or None,
+                    listing_url=(row.get("listing_url") or "").strip() or None,
+                    product_type=(row.get("product_type") or "").strip() or None,
+                    aesthetic=(row.get("aesthetic") or "").strip() or None,
+                    bundle_type=(row.get("bundle_type") or "").strip() or None,
+                    pain_point=(row.get("pain_point") or "").strip() or None,
+                    pattern_notes=(row.get("pattern_notes") or "").strip() or None,
+                    risk_flags=(row.get("risk_flags") or "").strip() or None,
+                )
+            )
+            imported += 1
+        session.flush()
+        run.item_count = session.scalar(
+            select(func.count(MarketResearchItem.id)).where(MarketResearchItem.run_id == run_id)
+        ) or 0
+        run.source = "csv" if imported else run.source
+
+    msg = f"Imported {imported} items."
+    if errors:
+        msg += f" {len(errors)} skipped: " + "; ".join(errors[:3])
+    return _market_research_redirect(run_id, "success", msg)
+
+
+@app.post("/market-research/{run_id}/analyze")
+def market_research_analyze(run_id: int):
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        items = session.scalars(
+            select(MarketResearchItem).where(MarketResearchItem.run_id == run_id)
+        ).all()
+        if not items:
+            return _market_research_redirect(run_id, "error", "No items to analyze. Import a CSV first.")
+
+        schema = {
+            "patterns": [
+                {
+                    "pattern_type": "title_structure",
+                    "pattern_summary": "string",
+                    "example_titles": ["string"],
+                    "price_range_low": None,
+                    "price_range_high": None,
+                    "recommended_modality": "planner",
+                    "recommended_marketplace": "etsy",
+                    "confidence": "medium",
+                }
+            ]
+        }
+        try:
+            result = call_llm_json(
+                session,
+                "market_pattern_extraction",
+                _market_pattern_system_prompt(),
+                _market_pattern_user_prompt(items),
+                schema,
+                max_cost_usd=0.012,
+            )
+        except (LlmBlocked, LlmFailed) as exc:
+            return _market_research_redirect(run_id, "error", f"Pattern analysis blocked or failed: {exc}")
+
+        patterns = result.get("patterns", []) if isinstance(result, dict) else []
+        existing = session.scalars(
+            select(MarketPattern).where(MarketPattern.run_id == run_id)
+        ).all()
+        for pattern in existing:
+            session.delete(pattern)
+        session.flush()
+
+        added = 0
+        for payload in patterns:
+            if not isinstance(payload, dict) or not payload.get("pattern_summary"):
+                continue
+            session.add(
+                MarketPattern(
+                    run_id=run_id,
+                    pattern_type=(payload.get("pattern_type") or "unknown")[:80],
+                    pattern_summary=str(payload["pattern_summary"])[:2000],
+                    example_titles=json.dumps(payload.get("example_titles") or []),
+                    price_range_low=_parse_int(payload.get("price_range_low")),
+                    price_range_high=_parse_int(payload.get("price_range_high")),
+                    recommended_modality=(payload.get("recommended_modality") or None),
+                    recommended_marketplace=(payload.get("recommended_marketplace") or None),
+                    confidence=(payload.get("confidence") or "medium"),
+                )
+            )
+            added += 1
+        run.status = "analyzed"
+
+    return _market_research_redirect(run_id, "success", f"Extracted {added} patterns.")
+
+
+@app.post("/market-research/{run_id}/generate-opportunities")
+def market_research_generate_opportunities(run_id: int):
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Research run not found")
+        patterns = session.scalars(
+            select(MarketPattern)
+            .where(MarketPattern.run_id == run_id)
+            .where(MarketPattern.confidence.in_(["medium", "high"]))
+            .where(MarketPattern.used_for_opportunity_id.is_(None))
+            .order_by(MarketPattern.id)
+        ).all()
+        if not patterns:
+            return _market_research_redirect(
+                run_id,
+                "error",
+                "No unused medium/high-confidence patterns. Run analysis first.",
+            )
+
+        schema = {
+            "opportunities": [
+                {
+                    "topic": "string",
+                    "modality": "planner",
+                    "marketplace": "etsy",
+                    "differentiation": "string",
+                    "target_buyer": "string",
+                    "price_point_dollars": 9,
+                    "pattern_basis": "string",
+                }
+            ]
+        }
+        try:
+            result = call_llm_json(
+                session,
+                "market_opportunity_generation",
+                _market_opportunity_system_prompt(),
+                _market_opportunity_user_prompt(patterns),
+                schema,
+                max_cost_usd=0.012,
+            )
+        except (LlmBlocked, LlmFailed) as exc:
+            return _market_research_redirect(run_id, "error", f"Opportunity generation blocked or failed: {exc}")
+
+        opportunities = result.get("opportunities", []) if isinstance(result, dict) else []
+        created_count = 0
+        unused_patterns = list(patterns)
+        for payload in opportunities:
+            if not isinstance(payload, dict) or not payload.get("topic"):
+                continue
+            candidate = _candidate_from_market_opportunity(payload)
+            session.add(candidate)
+            session.flush()
+            if unused_patterns:
+                unused_patterns.pop(0).used_for_opportunity_id = candidate.id
+            created_count += 1
+
+    return _market_research_redirect(
+        run_id,
+        "success",
+        f"Created {created_count} opportunities. Review them in /opportunities.",
+    )
+
+
+@app.delete("/market-research/{run_id}")
+def market_research_delete_api(run_id: int):
+    _delete_market_research_run(run_id)
+    return {"deleted": True, "run_id": run_id}
+
+
+@app.post("/market-research/{run_id}/delete")
+def market_research_delete_form(run_id: int):
+    _delete_market_research_run(run_id)
+    return RedirectResponse(
+        url="/market-research?flash=success&msg=Run+deleted",
+        status_code=303,
+    )
+
+
+def _delete_market_research_run(run_id: int) -> None:
+    with session_scope() as session:
+        run = session.get(MarketResearchRun, run_id)
+        if run:
+            session.delete(run)
+
+
+def _market_research_redirect(run_id: int, flash: str, msg: str) -> RedirectResponse:
+    from urllib.parse import urlencode
+
+    return RedirectResponse(
+        url=f"/market-research/{run_id}?" + urlencode({"flash": flash, "msg": msg}),
+        status_code=303,
+    )
+
+
+def _flash_banner(flash: str, msg: str) -> dict | None:
+    if flash == "success":
+        return {"level": "success", "message": msg or "Done."}
+    if flash == "error":
+        return {"level": "error", "message": msg or "Error."}
+    if flash:
+        return {"level": "warn", "message": msg or flash}
+    return None
+
+
+def _parse_price_cents(value) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace("$", "").replace(",", "")
+    if not text:
+        return None
+    try:
+        return int(float(text) * 100)
+    except ValueError:
+        return None
+
+
+def _parse_int(value) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text or text.lower() == "null":
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+
+def _parse_float(value) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _market_pattern_system_prompt() -> str:
+    return (
+        "You are a marketplace product analyst. Analyze manually imported marketplace observations. "
+        "Extract structural patterns only. Do not recommend copying listings, shops, trademarks, or protected IP. "
+        "Return valid JSON only."
+    )
+
+
+def _market_pattern_user_prompt(items: list[MarketResearchItem]) -> str:
+    summaries = []
+    for index, item in enumerate(items[:60], start=1):
+        parts = [f"Title: {item.title}"]
+        if item.price_cents:
+            parts.append(f"Price: ${item.price_cents / 100:.2f}")
+        if item.rating:
+            parts.append(f"Rating: {item.rating}")
+        if item.review_count:
+            parts.append(f"Reviews: {item.review_count}")
+        if item.tags:
+            parts.append(f"Tags: {item.tags}")
+        if item.product_type:
+            parts.append(f"Type: {item.product_type}")
+        if item.aesthetic:
+            parts.append(f"Aesthetic: {item.aesthetic}")
+        if item.bundle_type:
+            parts.append(f"Bundle: {item.bundle_type}")
+        if item.pain_point:
+            parts.append(f"Pain point: {item.pain_point}")
+        if item.pattern_notes:
+            parts.append(f"Notes: {item.pattern_notes}")
+        summaries.append(f"{index}. " + " | ".join(parts))
+
+    return (
+        "Analyze these listings and return 5 to 15 patterns in JSON under key 'patterns'. "
+        "Pattern types may include title_structure, tag_cluster, pricing_range, bundle_pattern, "
+        "pain_point, underserved_angle, modality_recommendation, marketplace_recommendation. "
+        "Use integer cents for price ranges and confidence low/medium/high.\n\n"
+        + "\n".join(summaries)
+    )
+
+
+def _market_opportunity_system_prompt() -> str:
+    return (
+        "You are a digital product strategist for HYDRA. Generate original digital product opportunities from "
+        "marketplace patterns. Do not copy any listing. Do not create legal, medical, political, or financial advice products. "
+        "Return valid JSON only."
+    )
+
+
+def _market_opportunity_user_prompt(patterns: list[MarketPattern]) -> str:
+    pattern_text = "\n".join(
+        f"- [{p.pattern_type}] {p.pattern_summary}"
+        + (f" | Modality: {p.recommended_modality}" if p.recommended_modality else "")
+        + (f" | Marketplace: {p.recommended_marketplace}" if p.recommended_marketplace else "")
+        for p in patterns[:30]
+    )
+    return (
+        "Based on these market patterns, generate 3 to 5 original product ideas as JSON under key 'opportunities'. "
+        "Each item needs topic, modality, marketplace, differentiation, target_buyer, price_point_dollars, pattern_basis. "
+        "All generated opportunities must remain candidates requiring operator approval.\n\n"
+        f"PATTERNS:\n{pattern_text}"
+    )
+
+
+def _candidate_from_market_opportunity(payload: dict) -> OpportunityCandidate:
+    modality = str(payload.get("modality") or "digital download").strip()
+    marketplace = str(payload.get("marketplace") or "marketplace").strip()
+    differentiation = str(payload.get("differentiation") or "").strip()
+    target_buyer = str(payload.get("target_buyer") or "").strip()
+    pattern_basis = str(payload.get("pattern_basis") or "").strip()
+    price_point = payload.get("price_point_dollars")
+    evidence = (
+        f"Marketplace intelligence pattern. Modality: {modality}. Marketplace: {marketplace}. "
+        f"Differentiation: {differentiation}. Target buyer: {target_buyer}. "
+        f"Suggested price: ${price_point or '?'}. Pattern basis: {pattern_basis}."
+    )
+    candidate_data = {
+        "source": "market_intelligence",
+        "topic": str(payload["topic"])[:200],
+        "vertical": _vertical_from_marketplace_payload(payload),
+        "production_format": _format_from_modality(modality),
+        "demand_velocity": 65,
+        "monetization_fit": 78,
+        "ai_exploitability": 70,
+        "cross_source_confirmation": 45,
+        "time_to_revenue": 75,
+        "saturation_penalty": 30,
+        "platform_risk_penalty": 22,
+        "status": "pending_review",
+        "evidence": evidence[:1000],
+    }
+    candidate_data["score"] = calculate_score(candidate_data)
+    return OpportunityCandidate(**candidate_data)
+
+
+def _vertical_from_marketplace_payload(payload: dict) -> str:
+    marketplace = str(payload.get("marketplace") or "marketplace").strip()
+    target = str(payload.get("target_buyer") or "").strip()
+    if target:
+        return f"Marketplace intelligence: {target}"[:120]
+    return f"Marketplace intelligence: {marketplace}"[:120]
+
+
+def _format_from_modality(modality: str) -> str:
+    mapping = {
+        "printable": "printable PDF pack",
+        "planner": "planner PDF",
+        "canva_template": "Canva template",
+        "prompt_pack": "prompt pack",
+        "pod_design": "print-on-demand design",
+        "checklist": "checklist PDF",
+        "worksheet": "worksheet PDF",
+        "tracker": "tracker PDF",
+        "social_kit": "social media kit",
+        "bundle": "digital bundle",
+    }
+    return mapping.get((modality or "").strip(), "digital download")
+
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slugify(value: str, max_len: int = 40) -> str:
+    if not value:
+        return "untitled"
+    slug = _SLUG_RE.sub("-", value.lower()).strip("-")
+    if not slug:
+        return "untitled"
+    return slug[:max_len].rstrip("-") or "untitled"
+
+
+def _truncate_title(title: str, limit: int = 70) -> str:
+    title = title.strip()
+    if len(title) <= limit:
+        return title
+    return title[: limit - 3].rstrip() + "..."
+
+
+_PRICE_HINTS = {
+    "prompt pack": Decimal("9"),
+    "cheat sheet": Decimal("9"),
+    "printable": Decimal("9"),
+    "checklist": Decimal("9"),
+    "template bundle": Decimal("15"),
+    "notion": Decimal("19"),
+    "airtable": Decimal("19"),
+    "workflow pdf": Decimal("15"),
+    "script pack": Decimal("19"),
+    "mini-toolkit": Decimal("29"),
+    "toolkit": Decimal("29"),
+}
+
+
+def _suggest_price(production_format: str | None) -> Decimal:
+    fmt = (production_format or "").lower()
+    for hint, price in _PRICE_HINTS.items():
+        if hint in fmt:
+            return price
+    return Decimal("19")
+
+
+def _format_short_label(production_format: str | None) -> str:
+    """Human-friendly format label for titles. Avoids `'cheat sheet PDF'.title()` ugliness."""
+    if not production_format:
+        return "Pack"
+    f = production_format.lower()
+    pairs = (
+        ("cheat sheet", "Cheat Sheet"),
+        ("prompt pack", "Prompt Pack"),
+        ("notion", "Notion Template"),
+        ("airtable", "Airtable Template"),
+        ("checklist", "Checklist"),
+        ("printable", "Printable Pack"),
+        ("template bundle", "Template Bundle"),
+        ("workflow pdf", "Workflow Guide"),
+        ("workflow guide", "Workflow Guide"),
+        ("script pack", "Script Pack"),
+        ("mini-toolkit", "Toolkit"),
+        ("toolkit", "Toolkit"),
+        ("planner", "Planner"),
+        ("tracker", "Tracker"),
+        ("kit", "Kit"),
+        ("guide", "Guide"),
+        ("pdf", "Guide"),
+    )
+    for needle, label in pairs:
+        if needle in f:
+            return label
+    return "Pack"
+
+
+def build_default_product_fields(candidate: OpportunityCandidate, db=None) -> dict:
+    """Prefill a draft product, using LLM notes only when guarded calls succeed."""
+    short = _format_short_label(candidate.production_format)
+    title = _truncate_title(f"{candidate.topic} — {short}")
+    notes = _build_llm_product_notes(candidate, db) if db is not None else None
+    if notes is None:
+        notes = _build_deterministic_product_notes(candidate)
+    return {
+        "title": title,
+        "production_format": candidate.production_format,
+        "price": _suggest_price(candidate.production_format),
+        "notes": notes,
+    }
+
+
+def _build_deterministic_product_notes(candidate: OpportunityCandidate) -> str:
+    score = candidate.score if candidate.score is not None else 0
+    notes_lines = [
+        f"Source: {candidate.source}",
+        f"Vertical: {candidate.vertical}",
+        f"Production format: {candidate.production_format}",
+        f"SIGNAL score: {score}",
+        "",
+        "Evidence:",
+        candidate.evidence or "(none)",
+        "",
+        "Suggested deliverable structure:",
+        "- Promise / cover (1 page)",
+        "- Quick-start (2-3 pages)",
+        "- Core content (5-12 pages)",
+        "- Templates / examples / prompts",
+        "- Closing / cross-sell",
+        "",
+        "Operator notes:",
+        "(edit before generation)",
+    ]
+    return "\n".join(notes_lines)
+
+
+def _build_llm_product_notes(candidate: OpportunityCandidate, db) -> str | None:
+    schema = {
+        "product_angle": "string",
+        "target_buyer": "string",
+        "pain_point": "string",
+        "suggested_deliverables": ["string"],
+        "distribution_angle": "string",
+        "risk_notes": "string",
+    }
+    system_prompt = (
+        "You are HYDRA Zone B support code. Produce operator-editable product draft notes only. "
+        "Do not write final product content. Do not claim legal, medical, political, or financial advice."
+    )
+    user_prompt = (
+        f"Topic: {candidate.topic}\n"
+        f"Source: {candidate.source}\n"
+        f"Vertical: {candidate.vertical}\n"
+        f"Production format: {candidate.production_format}\n"
+        f"Evidence: {candidate.evidence or '(none)'}\n\n"
+        "Return concise structured notes with product angle, target buyer, pain point, suggested deliverables, "
+        "distribution angle, and risk notes."
+    )
+    try:
+        data = call_llm_json(
+            db,
+            purpose="product_prefill",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema_hint=schema,
+            max_cost_usd=0.001,
+            timeout_seconds=20,
+        )
+    except (LlmBlocked, LlmFailed):
+        return None
+
+    deliverables = data.get("suggested_deliverables") or []
+    if not isinstance(deliverables, list):
+        deliverables = [str(deliverables)]
+    lines = [
+        "LLM-assisted draft notes (operator must review):",
+        f"Product angle: {str(data.get('product_angle') or '').strip()}",
+        f"Target buyer: {str(data.get('target_buyer') or '').strip()}",
+        f"Pain point: {str(data.get('pain_point') or '').strip()}",
+        "Suggested deliverables:",
+    ]
+    lines.extend(f"- {str(item).strip()}" for item in deliverables[:8] if str(item).strip())
+    lines.extend(
+        [
+            f"Distribution angle: {str(data.get('distribution_angle') or '').strip()}",
+            f"Risk notes: {str(data.get('risk_notes') or 'None noted').strip()}",
+            "",
+            "Operator notes:",
+            "(edit before generation)",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def check_gumroad_url(product: Product) -> dict | None:
+    """Return a single warning/info dict for product_edit, or None if neutral."""
+    url = (product.gumroad_url or "").strip()
+    status = product.status or ""
+    if status == "live" and not url:
+        return {
+            "level": "warning",
+            "message": "Live status set without a Gumroad URL. Buyers cannot reach the listing.",
+        }
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        return {
+            "level": "warning",
+            "message": "Gumroad URL must start with http:// or https://.",
+        }
+    if status == "live" and url:
+        return {"level": "good", "message": "Launch URL ready."}
+    return None
+
+
+def _valid_basic_auth(auth_header: str, expected_user: str, expected_pass: str) -> bool:
+    if not auth_header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth_header.removeprefix("Basic ").strip()).decode("utf-8")
+        username, password = decoded.split(":", 1)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return secrets.compare_digest(username, expected_user) and secrets.compare_digest(password, expected_pass)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.2 — file tracking, artifact export, HN collector, launch dashboard
+# ---------------------------------------------------------------------------
+
+
+@app.get("/products/{product_id}/files/new")
+def new_product_file(request: Request, product_id: int):
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return templates.TemplateResponse(
+            "product_files_new.html",
+            {"request": request, "product": product},
+        )
+
+
+@app.post("/products/{product_id}/files")
+def create_product_file(
+    product_id: int,
+    file_label: str = Form(...),
+    file_path: str = Form(...),
+    file_type: str = Form("manual"),
+    notes: str = Form(""),
+):
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        session.add(
+            ProductFile(
+                product_id=product_id,
+                file_label=file_label,
+                file_path=file_path,
+                file_type=file_type or "manual",
+                notes=notes,
+            )
+        )
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+
+@app.post("/products/{product_id}/package")
+def package_product(product_id: int):
+    """Build a local upload-ready product package from generated artifacts."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        artifact_rows = session.scalars(
+            select(ProductArtifact)
+            .where(ProductArtifact.product_id == product_id)
+            .order_by(desc(ProductArtifact.created_at))
+        ).all()
+        product_data = _model_to_dict(product)
+        artifacts = [_model_to_dict(artifact) for artifact in artifact_rows]
+
+    artifact_map = _latest_artifacts_by_type(artifacts)
+    for artifact_type in ("outline", "product_content", "listing_copy"):
+        if artifact_type not in artifact_map:
+            return _generation_redirect(
+                product_id,
+                "blocked",
+                "package",
+                msg=f"Missing required artifact: {artifact_type}",
+            )
+
+    result = build_product_package(product_data, artifact_map)
+    zip_path = result["zip_path"]
+
+    with session_scope() as session:
+        exists = session.scalar(
+            select(ProductFile.id).where(
+                ProductFile.product_id == product_id,
+                ProductFile.file_path == zip_path,
+            )
+        )
+        if not exists:
+            session.add(
+                ProductFile(
+                    product_id=product_id,
+                    file_label=f"Product package ZIP: {product_data['title']}",
+                    file_path=zip_path,
+                    file_type="package_zip",
+                    notes="auto-generated by Sprint 1.8 package builder",
+                )
+            )
+
+    return _generation_redirect(
+        product_id,
+        "success",
+        "package",
+        msg=f"✓ Product package built: {zip_path}",
+    )
+
+
+@app.post("/products/{product_id}/quality-check")
+def quality_check_product(product_id: int):
+    """Run deterministic package quality scoring and upload-readiness checks."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        product_data = _model_to_dict(product)
+
+    report = build_readiness_report(product_data)
+    return _generation_redirect(
+        product_id,
+        "success",
+        "quality",
+        msg=f"✓ Readiness check complete: {report['readiness_status']} ({report['readiness_score']}/100)",
+    )
+
+
+@app.post("/products/{product_id}/artifacts/export")
+def export_product_artifacts(product_id: int):
+    """Write every artifact for a product to exports/product_<id>/NNN_<type>_<slug>.md."""
+    try:
+        assert_system_can_act("artifact_export")
+    except SystemActionBlocked as exc:
+        return JSONResponse(
+            {"blocked": True, "action": "artifact_export", "reason": str(exc)},
+            status_code=423,
+        )
+
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        artifacts = session.scalars(
+            select(ProductArtifact)
+            .where(ProductArtifact.product_id == product_id)
+            .order_by(ProductArtifact.created_at)
+        ).all()
+        product_title = product.title or f"product_{product_id}"
+        rows = [
+            {
+                "id": a.id,
+                "artifact_type": a.artifact_type,
+                "title": a.title,
+                "source": a.source,
+                "content": a.content,
+                "created_at": a.created_at.isoformat() if a.created_at else "",
+            }
+            for a in artifacts
+        ]
+
+    if not rows:
+        return JSONResponse(
+            {"product_id": product_id, "exported": [], "count": 0, "note": "No artifacts to export."},
+        )
+
+    export_dir = EXPORT_ROOT / f"product_{product_id}"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    pairs: list[tuple[str, str, str]] = []  # (label, path, type)
+    for index, row in enumerate(rows, start=1):
+        slug = _slugify(row["title"] or row["artifact_type"])
+        filename = f"{index:03d}_{row['artifact_type']}_{slug}.md"
+        path = export_dir / filename
+        body = (
+            f"# {row['title'] or row['artifact_type']}\n\n"
+            f"_Type: {row['artifact_type']} | Source: {row['source']} | "
+            f"Created: {row['created_at']}_\n\n"
+            f"_Product: {product_title} (id {product_id})_\n\n"
+            f"---\n\n{row['content']}\n"
+        )
+        path.write_text(body, encoding="utf-8")
+        written.append(str(path))
+        pairs.append((filename, str(path), "export"))
+
+    # Auto-register product_files rows so the operator never loses track of where
+    # an artifact landed on disk. Idempotent via the (product_id, file_path) unique
+    # index applied in db._apply_one_shot_migrations().
+    registered = 0
+    with session_scope() as session:
+        for label, path_str, ftype in pairs:
+            exists = session.scalar(
+                select(ProductFile.id).where(
+                    ProductFile.product_id == product_id,
+                    ProductFile.file_path == path_str,
+                )
+            )
+            if exists:
+                continue
+            session.add(
+                ProductFile(
+                    product_id=product_id,
+                    file_label=label,
+                    file_path=path_str,
+                    file_type=ftype,
+                    notes="auto-registered by artifact export",
+                )
+            )
+            registered += 1
+
+    return JSONResponse(
+        {
+            "product_id": product_id,
+            "exported": written,
+            "count": len(written),
+            "directory": str(export_dir),
+            "files_registered": registered,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.8/1.9 — Product package builder
+# ---------------------------------------------------------------------------
+
+PRINTABLE_FORMAT_HINTS = ("planner", "printable", "worksheet", "tracker", "checklist")
+
+
+def build_product_package(product: dict, artifact_map: dict[str, dict]) -> dict:
+    """Create source files, printable assets, presentation docs, PDF, and ZIP."""
+    product_id = int(product["id"])
+    package_dir = PRODUCT_ROOT / f"product_{product_id}"
+    source_dir = package_dir / "source"
+    printable_dir = package_dir / "printable"
+    preview_dir = package_dir / "preview"
+    pdf_dir = package_dir / "pdf"
+    presentation_dir = package_dir / "presentation"
+    visual_dir = package_dir / "visual"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    warnings: list[str] = []
+    included_files: list[Path] = []
+    printable_files: list[Path] = []
+    pdf_files: list[Path] = []
+    preview_files: list[Path] = []
+    presentation_files: list[Path] = []
+    visual_files: list[Path] = []
+
+    for artifact_type in ARTIFACT_TYPES:
+        artifact = artifact_map.get(artifact_type)
+        if not artifact:
+            if artifact_type in ("qa_review", "distribution_post"):
+                warnings.append(f"Optional artifact missing: {artifact_type}")
+            continue
+        path = source_dir / f"{artifact_type}.md"
+        _write_package_file(path, _artifact_to_markdown(artifact), included_files)
+
+    content_data = _artifact_json(artifact_map["product_content"])
+    listing_data = _artifact_json(artifact_map["listing_copy"])
+    if _is_printable_format(product.get("production_format", "")):
+        printable_dir.mkdir(parents=True, exist_ok=True)
+        printable_files = _generate_printable_html_files(product, content_data, printable_dir)
+        included_files.extend(printable_files)
+        if not printable_files:
+            warnings.append("Printable format detected, but product_content had no sections to render.")
+        else:
+            pdf_dir.mkdir(parents=True, exist_ok=True)
+            pdf_path = pdf_dir / "printable_pack.pdf"
+            _write_printable_pdf(pdf_path, product, content_data)
+            included_files.append(pdf_path)
+            pdf_files.append(pdf_path)
+
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    cover_path = preview_dir / "cover_preview.html"
+    _write_package_file(cover_path, _render_cover_preview_html(product, artifact_map), included_files)
+    preview_files.append(cover_path)
+    sales_preview_path = preview_dir / "sales_page_preview.html"
+    _write_package_file(sales_preview_path, _render_sales_preview_html(product, listing_data), included_files)
+    preview_files.append(sales_preview_path)
+
+    presentation_dir.mkdir(parents=True, exist_ok=True)
+    for filename, content in (
+        ("gumroad_presentation_assets.md", _build_gumroad_presentation_assets(product, listing_data)),
+        ("fiverr_gig_brief.md", _build_fiverr_gig_brief(product, artifact_map)),
+        ("mockup_cover_spec.md", _build_mockup_cover_spec(product, artifact_map)),
+        ("perceived_value_stack.md", _build_perceived_value_stack(product, content_data, listing_data)),
+    ):
+        path = presentation_dir / filename
+        _write_package_file(path, content, included_files)
+        presentation_files.append(path)
+
+    visual_dir.mkdir(parents=True, exist_ok=True)
+    visual_theme = _build_visual_theme_intelligence(product, artifact_map)
+    visual_outputs = {
+        "visual_theme_intelligence.json": json.dumps(visual_theme, indent=2),
+        "aesthetic_system.md": _build_aesthetic_system_doc(product, visual_theme),
+        "cover_mockup_prompts.md": _build_cover_mockup_prompt_doc(product, artifact_map, visual_theme),
+        "product_gallery_plan.md": _build_product_gallery_plan(product, artifact_map, visual_theme),
+        "marketplace_visual_specs.md": _build_marketplace_visual_specs(product, visual_theme),
+        "image_slot_manifest.json": json.dumps(_build_image_slot_manifest(product, visual_theme), indent=2),
+        "presentation_hierarchy.md": _build_presentation_hierarchy(product, artifact_map, visual_theme),
+    }
+    for filename, content in visual_outputs.items():
+        path = visual_dir / filename
+        _write_package_file(path, content, included_files)
+        visual_files.append(path)
+
+    readme_path = package_dir / "README.md"
+    _write_package_file(readme_path, _build_package_readme(product, artifact_map), included_files)
+
+    checklist_path = package_dir / "marketplace_checklist.md"
+    _write_package_file(checklist_path, _build_marketplace_checklist(product, artifact_map), included_files)
+
+    manifest_path = package_dir / "manifest.json"
+    manifest = {
+        "package_version": "2.0",
+        "product_id": product_id,
+        "title": product.get("title"),
+        "production_format": product.get("production_format"),
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "included_files": [_package_relative(path) for path in included_files],
+        "printable_html_files": [_package_relative(path) for path in printable_files],
+        "pdf_files": [_package_relative(path) for path in pdf_files],
+        "preview_assets": [_package_relative(path) for path in preview_files],
+        "presentation_assets": [_package_relative(path) for path in presentation_files],
+        "visual_assets": [_package_relative(path) for path in visual_files],
+        "visual_theme": visual_theme,
+        "artifact_ids": {
+            artifact_type: artifact.get("id")
+            for artifact_type, artifact in artifact_map.items()
+        },
+        "warnings": warnings,
+    }
+    _write_package_file(manifest_path, json.dumps(manifest, indent=2), included_files)
+
+    zip_path = PRODUCT_ROOT / f"product_{product_id}.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(package_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, arcname=path.relative_to(PRODUCT_ROOT))
+
+    return {
+        "package_dir": str(package_dir),
+        "zip_path": str(zip_path),
+        "included_files": [_package_relative(path) for path in included_files],
+        "warnings": warnings,
+    }
+
+
+def _latest_artifacts_by_type(artifacts: list[dict]) -> dict[str, dict]:
+    latest: dict[str, dict] = {}
+    for artifact in artifacts:
+        artifact_type = artifact.get("artifact_type")
+        if artifact_type and artifact_type not in latest:
+            latest[artifact_type] = artifact
+    return latest
+
+
+def _write_package_file(path: Path, content: str, included_files: list[Path]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.rstrip() + "\n", encoding="utf-8")
+    included_files.append(path)
+
+
+def _package_relative(path: Path) -> str:
+    try:
+        return str(path.relative_to(PRODUCT_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _artifact_json(artifact: dict | None) -> dict:
+    if not artifact:
+        return {}
+    try:
+        data = json.loads(artifact.get("content") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _artifact_to_markdown(artifact: dict) -> str:
+    artifact_type = artifact.get("artifact_type", "artifact")
+    title = artifact.get("title") or artifact_type
+    data = _artifact_json(artifact)
+    if artifact_type == "outline" and data:
+        sections = data.get("deliverable_sections") or []
+        lines = [
+            f"# {data.get('product_title') or title}",
+            "",
+            f"**Tagline:** {data.get('tagline', '')}",
+            f"**Buyer persona:** {data.get('buyer_persona', '')}",
+            f"**Core pain solved:** {data.get('core_pain_solved', '')}",
+            "",
+            "## Deliverable Sections",
+            "",
+        ]
+        for section in sections:
+            lines.append(f"- **{section.get('title', 'Section')}** — {section.get('purpose', '')} ({section.get('estimated_length', '')})")
+        lines.extend([
+            "",
+            "## Marketplace Angles",
+            "",
+            f"- Etsy: {data.get('etsy_keyword_angle', '')}",
+            f"- Gumroad: {data.get('gumroad_hook', '')}",
+            f"- Risk notes: {data.get('risk_notes', 'none')}",
+        ])
+        return "\n".join(lines)
+    if artifact_type == "product_content" and data:
+        lines = [f"# {title}", ""]
+        for section in data.get("sections") or []:
+            lines.extend([f"## {section.get('title', 'Section')}", "", section.get("content", ""), ""])
+        if data.get("total_word_count_estimate"):
+            lines.append(f"_Estimated word count: {data['total_word_count_estimate']}_")
+        return "\n".join(lines)
+    if artifact_type == "listing_copy" and data:
+        lines = [f"# {title}", ""]
+        for platform in ("gumroad", "etsy", "sellfy", "payhip", "universal"):
+            block = data.get(platform)
+            if not isinstance(block, dict):
+                continue
+            lines.extend([f"## {platform.title().replace('_', ' ')}", ""])
+            for key, value in block.items():
+                if isinstance(value, list):
+                    value = ", ".join(str(item) for item in value)
+                lines.append(f"**{key.replace('_', ' ').title()}:** {value}")
+            lines.append("")
+        return "\n".join(lines)
+    if data:
+        return f"# {title}\n\n```json\n{json.dumps(data, indent=2)}\n```"
+    return f"# {title}\n\n{artifact.get('content', '')}"
+
+
+def _is_printable_format(production_format: str | None) -> bool:
+    text = (production_format or "").lower()
+    return any(hint in text for hint in PRINTABLE_FORMAT_HINTS)
+
+
+def _generate_printable_html_files(product: dict, content_data: dict, printable_dir: Path) -> list[Path]:
+    sections = content_data.get("sections") or []
+    written: list[Path] = []
+    cover_path = printable_dir / "00_cover.html"
+    cover_path.write_text(_render_printable_cover_html(product, content_data), encoding="utf-8")
+    written.append(cover_path)
+    for index, section in enumerate(sections, start=1):
+        title = str(section.get("title") or f"Section {index}")
+        filename = f"{index:02d}_{_slugify(title, 48)}.html"
+        path = printable_dir / filename
+        path.write_text(_render_printable_html(product, title, str(section.get("content") or "")), encoding="utf-8")
+        written.append(path)
+    return written
+
+
+def _render_printable_html(product: dict, section_title: str, content: str) -> str:
+    product_title = html_lib.escape(str(product.get("title") or "Printable"))
+    section = html_lib.escape(section_title)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", content) if p.strip()]
+    body = "\n".join(f"<p>{html_lib.escape(paragraph)}</p>" for paragraph in paragraphs[:8])
+    checklist = "\n".join(
+        '<label class="check-row"><span class="box"></span><span class="line"></span></label>'
+        for _ in range(5)
+    )
+    note_lines = "\n".join('<div class="write-line"></div>' for _ in range(6))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{section} - {product_title}</title>
+  <style>
+    @page {{ size: letter; margin: 0.55in; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; color: #111; background: #fff; font-family: Georgia, 'Times New Roman', serif; line-height: 1.45; }}
+    .page {{ width: 100%; min-height: 9.9in; border: 2px solid #111; padding: 0.32in; }}
+    .brand {{ font-family: Arial, Helvetica, sans-serif; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; border-bottom: 1px solid #111; padding-bottom: 8px; margin-bottom: 16px; }}
+    h1 {{ font-family: Arial, Helvetica, sans-serif; font-size: 26px; margin: 0 0 6px; }}
+    h2 {{ font-family: Arial, Helvetica, sans-serif; font-size: 15px; margin: 0 0 18px; font-weight: 400; }}
+    p {{ font-size: 12px; margin: 0 0 10px; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
+    .section {{ border: 1px solid #222; padding: 14px; margin: 14px 0; break-inside: avoid; }}
+    .label {{ font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; margin-bottom: 8px; }}
+    .check-row {{ display: flex; gap: 10px; align-items: center; margin: 10px 0; }}
+    .box {{ display: inline-block; width: 14px; height: 14px; border: 1px solid #111; }}
+    .line, .write-line {{ display: block; border-bottom: 1px solid #111; min-height: 20px; flex: 1; }}
+    .write-line {{ margin: 12px 0; }}
+    .footer {{ margin-top: 18px; font-size: 10px; color: #444; }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="brand">Printable Digital Download</div>
+    <h1>{section}</h1>
+    <h2>{product_title}</h2>
+    <section class="section">
+      <div class="label">Instructions</div>
+      {body or "<p>Use this printable page to plan, track, and review your next action.</p>"}
+    </section>
+    <div class="grid">
+      <section class="section">
+        <div class="label">Action Checklist</div>
+        {checklist}
+      </section>
+      <section class="section">
+        <div class="label">Notes / Planning Space</div>
+        {note_lines}
+      </section>
+    </div>
+    <div class="footer">Personal use unless the seller changes the license terms.</div>
+  </main>
+</body>
+</html>
+"""
+
+
+def _render_printable_cover_html(product: dict, content_data: dict) -> str:
+    product_title = html_lib.escape(str(product.get("title") or "Printable Pack"))
+    sections = content_data.get("sections") or []
+    section_list = "\n".join(
+        f"<li>{html_lib.escape(str(section.get('title') or 'Worksheet'))}</li>"
+        for section in sections
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{product_title} Cover</title>
+  <style>
+    @page {{ size: letter; margin: 0.55in; }}
+    body {{ margin: 0; color: #111; background: #fff; font-family: Arial, Helvetica, sans-serif; }}
+    .cover {{ min-height: 9.9in; border: 3px solid #111; padding: .55in; display: flex; flex-direction: column; justify-content: space-between; }}
+    .eyebrow {{ text-transform: uppercase; letter-spacing: .12em; font-size: 12px; border-bottom: 1px solid #111; padding-bottom: 12px; }}
+    h1 {{ font-size: 44px; line-height: 1.05; margin: 32px 0 20px; max-width: 8in; }}
+    .subtitle {{ font-size: 18px; max-width: 6.5in; }}
+    .includes {{ border: 1px solid #111; padding: 18px; margin-top: 28px; }}
+    li {{ margin: 8px 0; font-size: 14px; }}
+    .footer {{ font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
+  </style>
+</head>
+<body>
+  <main class="cover">
+    <section>
+      <div class="eyebrow">Printable planner pack</div>
+      <h1>{product_title}</h1>
+      <div class="subtitle">A practical printable download designed for focused planning, tracking, and follow-through.</div>
+      <div class="includes">
+        <strong>Included pages</strong>
+        <ul>{section_list or "<li>Printable planning pages</li>"}</ul>
+      </div>
+    </section>
+    <div class="footer">Personal use digital download</div>
+  </main>
+</body>
+</html>
+"""
+
+
+def _render_cover_preview_html(product: dict, artifact_map: dict[str, dict]) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    universal = listing.get("universal") or {}
+    title = html_lib.escape(str(product.get("title") or outline.get("product_title") or "Digital Product"))
+    tagline = html_lib.escape(str(universal.get("tagline") or outline.get("tagline") or "Printable digital download"))
+    format_text = html_lib.escape(str(product.get("production_format") or "digital download"))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cover Preview - {title}</title>
+  <style>
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #eceff3; font-family: Arial, Helvetica, sans-serif; color: #101820; }}
+    .mockup {{ width: 720px; max-width: calc(100vw - 40px); aspect-ratio: 4 / 5; background: #fff; box-shadow: 0 30px 80px rgba(0,0,0,.22); border: 1px solid #d8dde5; padding: 56px; display: flex; flex-direction: column; justify-content: space-between; }}
+    .kicker {{ text-transform: uppercase; letter-spacing: .14em; font-size: 13px; font-weight: 700; border-bottom: 2px solid #101820; padding-bottom: 14px; }}
+    h1 {{ font-size: 56px; line-height: 1.02; margin: 42px 0 20px; max-width: 620px; }}
+    .tagline {{ font-size: 20px; line-height: 1.35; max-width: 520px; }}
+    .format {{ font-size: 14px; text-transform: uppercase; letter-spacing: .1em; border: 1px solid #101820; padding: 10px 14px; display: inline-block; }}
+  </style>
+</head>
+<body>
+  <main class="mockup">
+    <section>
+      <div class="kicker">Ready-to-upload digital product</div>
+      <h1>{title}</h1>
+      <div class="tagline">{tagline}</div>
+    </section>
+    <div class="format">{format_text}</div>
+  </main>
+</body>
+</html>
+"""
+
+
+def _render_sales_preview_html(product: dict, listing_data: dict) -> str:
+    gumroad = listing_data.get("gumroad") or {}
+    universal = listing_data.get("universal") or {}
+    title = html_lib.escape(str(gumroad.get("title") or product.get("title") or "Digital Product"))
+    short = html_lib.escape(str(universal.get("short_description") or "A practical digital download built for immediate use."))
+    description = html_lib.escape(str(gumroad.get("description") or "")[:1400])
+    price = html_lib.escape(str(product.get("price") or ""))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sales Page Preview - {title}</title>
+  <style>
+    body {{ margin: 0; background: #f7f7f5; color: #161616; font-family: Arial, Helvetica, sans-serif; }}
+    main {{ width: min(980px, calc(100% - 40px)); margin: 48px auto; display: grid; grid-template-columns: .9fr 1.1fr; gap: 28px; }}
+    .cover {{ aspect-ratio: 4 / 5; background: #fff; border: 1px solid #222; box-shadow: 0 16px 40px rgba(0,0,0,.12); padding: 34px; display: flex; flex-direction: column; justify-content: space-between; }}
+    .cover h1 {{ font-size: 38px; line-height: 1.05; }}
+    .panel {{ background: #fff; border: 1px solid #ddd; padding: 28px; }}
+    h2 {{ font-size: 34px; margin: 0 0 10px; }}
+    .short {{ font-size: 18px; color: #444; margin-bottom: 18px; }}
+    .price {{ display: inline-block; border: 1px solid #111; padding: 10px 14px; margin: 18px 0; font-weight: 700; }}
+    p {{ line-height: 1.55; white-space: pre-wrap; }}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="cover"><div><strong>Digital Download</strong><h1>{title}</h1></div><div>Printable product preview</div></section>
+    <section class="panel">
+      <h2>{title}</h2>
+      <div class="short">{short}</div>
+      <div class="price">${price}</div>
+      <p>{description}</p>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def _build_gumroad_presentation_assets(product: dict, listing_data: dict) -> str:
+    gumroad = listing_data.get("gumroad") or {}
+    universal = listing_data.get("universal") or {}
+    tags = gumroad.get("tags") or []
+    if isinstance(tags, list):
+        tags = ", ".join(str(tag) for tag in tags)
+    return "\n".join([
+        f"# Gumroad Presentation Assets - {product.get('title')}",
+        "",
+        f"## Title\n\n{gumroad.get('title') or product.get('title')}",
+        "",
+        f"## Short Description\n\n{universal.get('short_description', '')}",
+        "",
+        f"## Price\n\n${product.get('price')}",
+        "",
+        f"## Tags\n\n{tags}",
+        "",
+        "## Preview Assets To Use",
+        "",
+        "- `preview/cover_preview.html` for cover direction",
+        "- `preview/sales_page_preview.html` for offer framing",
+        "- `pdf/printable_pack.pdf` as customer-facing file when acceptable",
+        "",
+        "## Upload Notes",
+        "",
+        "- Use the ZIP as the main Gumroad product file.",
+        "- Add mockup images manually before launch.",
+        "- Confirm personal-use license language before publishing.",
+    ])
+
+
+def _build_fiverr_gig_brief(product: dict, artifact_map: dict[str, dict]) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    return "\n".join([
+        f"# Fiverr Gig Brief - {product.get('title')}",
+        "",
+        "Use this only if outsourcing mockups, cover polish, or PDF styling. Do not give freelancers HYDRA credentials.",
+        "",
+        "## Project",
+        "",
+        f"Create polished marketplace preview images and optional PDF styling for: **{product.get('title')}**.",
+        "",
+        "## Audience",
+        "",
+        outline.get("buyer_persona", "Digital download buyers"),
+        "",
+        "## Core Promise",
+        "",
+        outline.get("core_pain_solved", "A practical printable product that saves time and improves clarity."),
+        "",
+        "## Deliverables To Request",
+        "",
+        "- 1 square cover image, 2000x2000 PNG",
+        "- 1 Etsy/Gumroad hero mockup, 2400x1600 PNG",
+        "- 3 preview images showing included printable pages",
+        "- Optional styled PDF export using the included HTML/PDF as source",
+        "",
+        "## Constraints",
+        "",
+        "- No trademarked characters or brand imitation.",
+        "- Keep text readable at thumbnail size.",
+        "- Do not claim medical, financial, legal, or guaranteed outcomes.",
+    ])
+
+
+def _build_mockup_cover_spec(product: dict, artifact_map: dict[str, dict]) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    content = _artifact_json(artifact_map.get("product_content"))
+    section_titles = [str(section.get("title")) for section in content.get("sections", []) if section.get("title")]
+    return "\n".join([
+        f"# Mockup And Cover Specification - {product.get('title')}",
+        "",
+        "## Cover Direction",
+        "",
+        f"- Main title: {product.get('title')}",
+        f"- Subtitle angle: {outline.get('tagline', 'Printable digital download')}",
+        "- Style: clean, high-contrast, practical, marketplace thumbnail readable",
+        "- Avoid: fake app screenshots, fake reviews, medical/therapy claims, brand imitation",
+        "",
+        "## Preview Image Shot List",
+        "",
+        "1. Cover image with product title and format",
+        "2. Flat lay or stacked-pages mockup showing the printable pack",
+        "3. Close-up of the most valuable worksheet/page",
+        "4. Before/after value image: messy planning vs organized planner",
+        "5. What's included image listing the pages",
+        "",
+        "## Pages To Feature",
+        "",
+        *(f"- {title}" for title in section_titles[:8]),
+        "",
+        "## Export Requirements",
+        "",
+        "- Square: 2000x2000 PNG",
+        "- Landscape: 2400x1600 PNG",
+        "- Keep source editable if a designer is involved",
+    ])
+
+
+def _build_perceived_value_stack(product: dict, content_data: dict, listing_data: dict) -> str:
+    sections = content_data.get("sections") or []
+    etsy = listing_data.get("etsy") or {}
+    return "\n".join([
+        f"# Perceived Value Stack - {product.get('title')}",
+        "",
+        f"Suggested price: ${product.get('price')}",
+        "",
+        "## What The Buyer Gets",
+        "",
+        *(f"- {section.get('title', 'Printable page')}" for section in sections),
+        "",
+        "## Value Framing",
+        "",
+        "- Saves planning/setup time",
+        "- Gives the buyer a finished, printable workflow",
+        "- Works immediately after download",
+        "- Includes source/preview files for operator review",
+        "",
+        "## Etsy Search Angle",
+        "",
+        etsy.get("title", ""),
+        "",
+        "## Listing Enhancements Still Needed",
+        "",
+        "- Product mockup images",
+        "- Thumbnail-optimized cover",
+        "- Final policy and typo review",
+    ])
+
+
+def _build_visual_theme_intelligence(product: dict, artifact_map: dict[str, dict]) -> dict:
+    outline = _artifact_json(artifact_map.get("outline"))
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    text = " ".join(
+        str(value or "")
+        for value in (
+            product.get("title"),
+            product.get("production_format"),
+            outline.get("buyer_persona"),
+            outline.get("core_pain_solved"),
+            outline.get("tagline"),
+            (listing.get("etsy") or {}).get("title"),
+        )
+    ).lower()
+    niche = _visual_niche_for(text)
+    systems = {
+        "adhd_focus": {
+            "palette": ["#0F172A", "#2563EB", "#F59E0B", "#F8FAFC", "#E2E8F0"],
+            "typography": "bold sans-serif headings, calm readable body text",
+            "mood": "clear, structured, low-clutter, encouraging",
+            "avoid": ["busy backgrounds", "medical claims", "chaotic sticker overload"],
+            "buyer_signal": "feels simple enough to start today",
+        },
+        "student_study": {
+            "palette": ["#111827", "#10B981", "#60A5FA", "#FFFFFF", "#F3F4F6"],
+            "typography": "clean academic sans-serif with strong section labels",
+            "mood": "organized, fresh, efficient, semester-ready",
+            "avoid": ["childish school graphics", "overly corporate styling"],
+            "buyer_signal": "helps the buyer feel prepared and in control",
+        },
+        "creator_business": {
+            "palette": ["#18181B", "#D97706", "#F4F4F5", "#FFFFFF", "#71717A"],
+            "typography": "modern editorial sans-serif with premium spacing",
+            "mood": "premium, practical, businesslike, polished",
+            "avoid": ["generic laptop stock imagery", "fake revenue screenshots"],
+            "buyer_signal": "looks like a serious operating template",
+        },
+        "wellness_lifestyle": {
+            "palette": ["#1F2937", "#7C9885", "#EADBC8", "#FFFFFF", "#F3EFE7"],
+            "typography": "soft sans-serif with spacious headings",
+            "mood": "calm, reflective, supportive, printable-friendly",
+            "avoid": ["medical/therapy claims", "overly clinical layouts"],
+            "buyer_signal": "feels gentle and easy to keep using",
+        },
+        "generic_printable": {
+            "palette": ["#111111", "#3B82F6", "#F8FAFC", "#FFFFFF", "#D1D5DB"],
+            "typography": "high-contrast sans-serif headings with readable body text",
+            "mood": "clean, useful, trustworthy, upload-ready",
+            "avoid": ["visual clutter", "tiny unreadable preview text"],
+            "buyer_signal": "instantly communicates what is included",
+        },
+    }
+    system = systems[niche]
+    return {
+        "niche": niche,
+        "palette": system["palette"],
+        "typography": system["typography"],
+        "mood": system["mood"],
+        "avoid": system["avoid"],
+        "buyer_signal": system["buyer_signal"],
+        "primary_visual_promise": outline.get("core_pain_solved") or "clearer planning and faster use",
+        "thumbnail_rule": "title and product type must remain readable at 300px wide",
+        "composition_rule": "show the cover first, then 3-5 interior pages, then included-files/value stack",
+        "platforms": ["Fiverr", "Gumroad", "Pinterest", "Sellfy", "Payhip"],
+    }
+
+
+def _visual_niche_for(text: str) -> str:
+    if any(word in text for word in ("adhd", "focus", "executive function", "distraction")):
+        return "adhd_focus"
+    if any(word in text for word in ("student", "study", "school", "exam", "semester")):
+        return "student_study"
+    if any(word in text for word in ("business", "creator", "sales", "launch", "client", "entrepreneur")):
+        return "creator_business"
+    if any(word in text for word in ("wellness", "self-care", "mental", "habit", "reflection")):
+        return "wellness_lifestyle"
+    return "generic_printable"
+
+
+def _build_aesthetic_system_doc(product: dict, theme: dict) -> str:
+    return "\n".join([
+        f"# Aesthetic System - {product.get('title')}",
+        "",
+        f"## Niche\n\n{theme['niche']}",
+        "",
+        f"## Mood\n\n{theme['mood']}",
+        "",
+        "## Palette",
+        "",
+        *(f"- `{color}`" for color in theme["palette"]),
+        "",
+        f"## Typography\n\n{theme['typography']}",
+        "",
+        f"## Buyer Signal\n\n{theme['buyer_signal']}",
+        "",
+        "## Avoid",
+        "",
+        *(f"- {item}" for item in theme["avoid"]),
+        "",
+        "## Design Rules",
+        "",
+        f"- {theme['thumbnail_rule']}",
+        f"- {theme['composition_rule']}",
+        "- Use high contrast for all text on marketplace preview images.",
+        "- Show actual printable pages, not abstract decorative art.",
+    ])
+
+
+def _build_cover_mockup_prompt_doc(product: dict, artifact_map: dict[str, dict], theme: dict) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    product_title = product.get("title")
+    return "\n".join([
+        f"# Cover And Mockup Prompt Briefs - {product_title}",
+        "",
+        "These are prompts/specs for a future image generator or a human/Fiverr designer. Do not publish without review.",
+        "",
+        "## Cover Prompt",
+        "",
+        f"Create a premium marketplace cover for a digital download titled '{product_title}'. "
+        f"Visual mood: {theme['mood']}. Palette: {', '.join(theme['palette'])}. "
+        f"Typography: {theme['typography']}. The cover must clearly communicate: {outline.get('core_pain_solved', theme['primary_visual_promise'])}. "
+        "Use clean printable-product composition, strong hierarchy, readable title, and no fake reviews or trademarked elements.",
+        "",
+        "## Mockup Prompt",
+        "",
+        f"Create a realistic digital product mockup showing the cover plus 3-5 interior printable pages for '{product_title}'. "
+        "Show pages fanned or stacked on a neutral desk-style background. Text must be readable at thumbnail size. "
+        "Avoid hands, fake devices, fake logos, and exaggerated claims.",
+        "",
+        "## Negative Prompt / Exclusions",
+        "",
+        "- No brand imitation",
+        "- No fake ratings, testimonials, or earnings",
+        "- No medical/legal/financial claims",
+        "- No blurry text",
+        "- No crowded collage layouts",
+    ])
+
+
+def _build_product_gallery_plan(product: dict, artifact_map: dict[str, dict], theme: dict) -> str:
+    content = _artifact_json(artifact_map.get("product_content"))
+    sections = [str(section.get("title")) for section in content.get("sections", []) if section.get("title")]
+    slots = _visual_image_slots(product, theme)
+    lines = [
+        f"# Product Gallery Plan - {product.get('title')}",
+        "",
+        "## Gallery Sequence",
+        "",
+    ]
+    for slot in slots:
+        lines.append(f"{slot['slot']}. **{slot['name']}** — {slot['purpose']} ({slot['ratio']}, {slot['platform_fit']})")
+    lines.extend(["", "## Interior Pages To Feature", ""])
+    lines.extend(f"- {title}" for title in sections[:8])
+    lines.extend([
+        "",
+        "## Presentation Notes",
+        "",
+        "- First image must explain what the product is without reading the description.",
+        "- Second image should show actual included pages.",
+        "- Third image should show the buyer outcome/value stack.",
+        "- Pinterest pin should be tall, simple, and benefit-led.",
+    ])
+    return "\n".join(lines)
+
+
+def _build_marketplace_visual_specs(product: dict, theme: dict) -> str:
+    return "\n".join([
+        f"# Marketplace Visual Specs - {product.get('title')}",
+        "",
+        "| Platform | Recommended Assets | Notes |",
+        "|---|---|---|",
+        "| Fiverr | 1280x769 gig image, 3-gallery image set | Lead with service/result: polished printable package or mockup design brief. |",
+        "| Gumroad | 1280x720 cover, 1:1 thumbnail, preview images | Show cover, included pages, and value stack. |",
+        "| Pinterest | 1000x1500 vertical pin | Use title + outcome + one clean product mockup. |",
+        "| Sellfy | 1600x900 cover, 1:1 product thumbnail | Keep text minimal and use high contrast. |",
+        "| Payhip | 1200x675 cover, gallery previews | Show file type and included pages clearly. |",
+        "",
+        "## Universal Rules",
+        "",
+        f"- Palette: {', '.join(theme['palette'])}",
+        f"- Mood: {theme['mood']}",
+        "- Export PNG/JPG under 5MB unless marketplace requires otherwise.",
+        "- Avoid unreadable tiny text; use 3-7 words on thumbnails when possible.",
+    ])
+
+
+def _build_image_slot_manifest(product: dict, theme: dict) -> dict:
+    return {
+        "product_id": product.get("id"),
+        "title": product.get("title"),
+        "theme_niche": theme["niche"],
+        "slots": _visual_image_slots(product, theme),
+        "global_constraints": [
+            "human review required before publishing",
+            "no fake reviews, ratings, earnings, or testimonials",
+            "no marketplace logos unless operator has rights",
+            "no image generation API called in this sprint",
+        ],
+    }
+
+
+def _visual_image_slots(product: dict, theme: dict) -> list[dict]:
+    title = product.get("title")
+    base_prompt = f"{title}, {theme['mood']}, palette {', '.join(theme['palette'])}"
+    return [
+        {
+            "slot": 1,
+            "name": "hero_cover",
+            "ratio": "1:1",
+            "platform_fit": "Gumroad, Sellfy, Payhip thumbnail",
+            "purpose": "Communicate product title and digital-download format immediately.",
+            "prompt_seed": f"Square marketplace cover for {base_prompt}",
+        },
+        {
+            "slot": 2,
+            "name": "page_spread_mockup",
+            "ratio": "4:3",
+            "platform_fit": "Gumroad gallery, Fiverr gallery",
+            "purpose": "Show cover plus interior printable pages as a tangible bundle.",
+            "prompt_seed": f"Clean page spread mockup for {base_prompt}",
+        },
+        {
+            "slot": 3,
+            "name": "included_pages_stack",
+            "ratio": "16:9",
+            "platform_fit": "Sellfy, Payhip, Gumroad",
+            "purpose": "List what the buyer receives and raise perceived value.",
+            "prompt_seed": f"Included pages value stack graphic for {base_prompt}",
+        },
+        {
+            "slot": 4,
+            "name": "pinterest_pin",
+            "ratio": "2:3",
+            "platform_fit": "Pinterest",
+            "purpose": "Benefit-led vertical pin that can drive discovery.",
+            "prompt_seed": f"Vertical Pinterest pin for {base_prompt}",
+        },
+        {
+            "slot": 5,
+            "name": "fiverr_brief_preview",
+            "ratio": "1280x769",
+            "platform_fit": "Fiverr",
+            "purpose": "If outsourcing, show the desired final presentation quality.",
+            "prompt_seed": f"Fiverr gig gallery preview for {base_prompt}",
+        },
+    ]
+
+
+def _build_presentation_hierarchy(product: dict, artifact_map: dict[str, dict], theme: dict) -> str:
+    outline = _artifact_json(artifact_map.get("outline"))
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    universal = listing.get("universal") or {}
+    return "\n".join([
+        f"# Presentation Hierarchy - {product.get('title')}",
+        "",
+        "## 1. Thumbnail Message",
+        "",
+        product.get("title") or "",
+        "",
+        "## 2. Outcome Promise",
+        "",
+        outline.get("core_pain_solved") or universal.get("short_description") or theme["primary_visual_promise"],
+        "",
+        "## 3. Proof Of Contents",
+        "",
+        "Show cover, page spread, included page list, and PDF/ZIP file contents.",
+        "",
+        "## 4. Buyer Confidence Signals",
+        "",
+        "- Clear file format",
+        "- Personal-use license",
+        "- Immediate download",
+        "- Printable pages shown directly",
+        "- Human review before publishing",
+        "",
+        "## 5. Final CTA",
+        "",
+        "Download, print, and use today.",
+    ])
+
+
+def _write_printable_pdf(path: Path, product: dict, content_data: dict) -> None:
+    title = str(product.get("title") or "Printable Pack")
+    sections = content_data.get("sections") or []
+    pages: list[list[str]] = []
+    cover_lines = [
+        title,
+        "",
+        str(product.get("production_format") or "Printable digital download"),
+        "",
+        "Included pages:",
+        *[f"- {section.get('title', 'Printable page')}" for section in sections],
+        "",
+        "Personal use unless the seller changes the license terms.",
+    ]
+    pages.append(_wrap_pdf_lines(cover_lines, width=78))
+    for section in sections:
+        lines = [
+            str(section.get("title") or "Printable Page"),
+            "",
+            "Instructions:",
+            str(section.get("content") or ""),
+            "",
+            "Action Checklist:",
+            "[ ] ________________________________________________",
+            "[ ] ________________________________________________",
+            "[ ] ________________________________________________",
+            "[ ] ________________________________________________",
+            "",
+            "Notes:",
+            "____________________________________________________",
+            "____________________________________________________",
+            "____________________________________________________",
+            "____________________________________________________",
+        ]
+        pages.append(_wrap_pdf_lines(lines, width=82))
+    _write_basic_pdf(path, pages)
+
+
+def _wrap_pdf_lines(lines: list[str], width: int) -> list[str]:
+    wrapped: list[str] = []
+    for line in lines:
+        if not line:
+            wrapped.append("")
+            continue
+        parts = textwrap.wrap(line, width=width) or [line]
+        wrapped.extend(parts)
+    return wrapped
+
+
+def _write_basic_pdf(path: Path, pages: list[list[str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    objects: list[bytes] = []
+    page_refs: list[int] = []
+    font_obj = 3
+    for page_lines in pages:
+        content_obj = len(objects) + 4
+        page_obj = content_obj + 1
+        stream = _pdf_page_stream(page_lines)
+        objects.append(
+            f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream"
+        )
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_obj} 0 R >> >> /Contents {content_obj} 0 R >>".encode("ascii")
+        )
+        page_refs.append(page_obj)
+    base_objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{' '.join(f'{ref} 0 R' for ref in page_refs)}] /Count {len(page_refs)} >>".encode("ascii"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    all_objects = base_objects + objects
+    offsets: list[int] = []
+    output = bytearray(b"%PDF-1.4\n")
+    for index, obj in enumerate(all_objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii"))
+        output.extend(obj)
+        output.extend(b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(all_objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets:
+        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.extend(
+        f"trailer\n<< /Size {len(all_objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii")
+    )
+    path.write_bytes(bytes(output))
+
+
+def _pdf_page_stream(lines: list[str]) -> bytes:
+    commands = ["BT", "/F1 12 Tf", "72 740 Td", "16 TL"]
+    for raw_line in lines[:42]:
+        line = _pdf_escape(raw_line[:110])
+        commands.append(f"({line}) Tj")
+        commands.append("T*")
+    commands.append("ET")
+    return "\n".join(commands).encode("latin-1", errors="replace")
+
+
+def _pdf_escape(text: str) -> str:
+    return (
+        text.encode("latin-1", errors="replace").decode("latin-1")
+        .replace("\\", "\\\\")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2.1 — Package quality scoring + upload readiness
+# ---------------------------------------------------------------------------
+
+QUALITY_FILES = (
+    "readiness_report.json",
+    "readiness_report.md",
+    "platform_readiness.md",
+    "missing_assets.md",
+    "policy_risk_check.md",
+    "improvement_plan.md",
+)
+
+POLICY_HIGH_RISK_KEYWORDS = (
+    "Disney",
+    "Marvel",
+    "Nintendo",
+    "pokémon",
+    "Pokemon",
+    "Star Wars",
+    "Taylor Swift",
+    "Barbie",
+    "NFL",
+    "NBA",
+    "official",
+    "licensed",
+)
+POLICY_MEDIUM_RISK_KEYWORDS = (
+    "inspired by",
+    "celebrity",
+    "swiftie",
+    "super bowl",
+    "mickey",
+    "zelda",
+    "mario",
+    "avengers",
+)
+
+
+def build_readiness_report(product: dict) -> dict:
+    product_id = int(product["id"])
+    package_dir = PRODUCT_ROOT / f"product_{product_id}"
+    quality_dir = package_dir / "quality"
+    quality_dir.mkdir(parents=True, exist_ok=True)
+
+    paths = _package_paths(product_id)
+    checks = _score_package_paths(paths)
+    policy = _policy_risk_scan(package_dir)
+    checks["policy_risk_clean"]["passed"] = policy["risk_level"] == "low"
+    platform_readiness = _platform_readiness(paths)
+    buyer_value = _buyer_value_clarity(package_dir)
+
+    hard_blockers = _hard_blockers(paths)
+    if policy["risk_level"] == "high":
+        hard_blockers.append("High policy/IP risk keyword found")
+
+    score = sum(item["points"] for item in checks.values() if item["passed"])
+    readiness_status = "ready" if score >= 80 and not hard_blockers else "not ready"
+    top_blockers = hard_blockers + _missing_asset_messages(checks)
+
+    report_paths = {
+        "readiness_report_json": str(quality_dir / "readiness_report.json"),
+        "readiness_report_md": str(quality_dir / "readiness_report.md"),
+        "platform_readiness": str(quality_dir / "platform_readiness.md"),
+        "missing_assets": str(quality_dir / "missing_assets.md"),
+        "policy_risk_check": str(quality_dir / "policy_risk_check.md"),
+        "improvement_plan": str(quality_dir / "improvement_plan.md"),
+    }
+    report = {
+        "product_id": product_id,
+        "title": product.get("title"),
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "readiness_score": score,
+        "readiness_status": readiness_status,
+        "hard_blockers": hard_blockers,
+        "top_blockers": top_blockers[:8],
+        "score_breakdown": checks,
+        "policy_risk": policy,
+        "buyer_value_clarity": buyer_value,
+        "platform_readiness": platform_readiness,
+        "report_paths": report_paths,
+    }
+
+    (quality_dir / "readiness_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (quality_dir / "readiness_report.md").write_text(_readiness_report_markdown(report), encoding="utf-8")
+    (quality_dir / "platform_readiness.md").write_text(_platform_readiness_markdown(platform_readiness), encoding="utf-8")
+    (quality_dir / "missing_assets.md").write_text(_missing_assets_markdown(checks, hard_blockers), encoding="utf-8")
+    (quality_dir / "policy_risk_check.md").write_text(_policy_risk_markdown(policy), encoding="utf-8")
+    (quality_dir / "improvement_plan.md").write_text(_improvement_plan_markdown(report), encoding="utf-8")
+
+    _update_manifest_with_quality(product_id, package_dir, report)
+    _refresh_package_zip(product_id, package_dir)
+    return report
+
+
+def _load_readiness_report(product_id: int) -> dict | None:
+    path = PRODUCT_ROOT / f"product_{product_id}" / "quality" / "readiness_report.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _package_paths(product_id: int) -> dict[str, Path]:
+    package_dir = PRODUCT_ROOT / f"product_{product_id}"
+    return {
+        "package_dir": package_dir,
+        "zip": PRODUCT_ROOT / f"product_{product_id}.zip",
+        "readme": package_dir / "README.md",
+        "manifest": package_dir / "manifest.json",
+        "marketplace_checklist": package_dir / "marketplace_checklist.md",
+        "source": package_dir / "source",
+        "outline": package_dir / "source" / "outline.md",
+        "product_content": package_dir / "source" / "product_content.md",
+        "listing_copy": package_dir / "source" / "listing_copy.md",
+        "printable": package_dir / "printable",
+        "pdf": package_dir / "pdf" / "printable_pack.pdf",
+        "preview": package_dir / "preview",
+        "visual": package_dir / "visual",
+        "presentation": package_dir / "presentation",
+        "fiverr_brief": package_dir / "presentation" / "fiverr_gig_brief.md",
+        "mockup_spec": package_dir / "presentation" / "mockup_cover_spec.md",
+        "gallery_plan": package_dir / "visual" / "product_gallery_plan.md",
+        "visual_specs": package_dir / "visual" / "marketplace_visual_specs.md",
+        "cover_prompts": package_dir / "visual" / "cover_mockup_prompts.md",
+    }
+
+
+def _score_package_paths(paths: dict[str, Path]) -> dict[str, dict]:
+    source_ok = paths["outline"].exists() and paths["product_content"].exists() and paths["listing_copy"].exists()
+    printable_ok = paths["printable"].exists() and any(paths["printable"].glob("*.html"))
+    preview_ok = paths["preview"].exists() and (paths["preview"] / "cover_preview.html").exists()
+    visual_ok = paths["visual"].exists() and paths["visual_specs"].exists() and paths["gallery_plan"].exists()
+    required_ok = (
+        paths["readme"].exists()
+        and paths["manifest"].exists()
+        and paths["marketplace_checklist"].exists()
+        and paths["product_content"].exists()
+        and paths["listing_copy"].exists()
+    )
+    return {
+        "required_files_present": {"points": 25, "passed": required_ok},
+        "source_markdown_present": {"points": 10, "passed": source_ok},
+        "printable_files_present": {"points": 10, "passed": printable_ok},
+        "pdf_present": {"points": 10, "passed": paths["pdf"].exists()},
+        "listing_copy_present": {"points": 10, "passed": paths["listing_copy"].exists()},
+        "preview_assets_present": {"points": 10, "passed": preview_ok},
+        "visual_specs_present": {"points": 10, "passed": visual_ok},
+        "marketplace_checklist_present": {"points": 5, "passed": paths["marketplace_checklist"].exists()},
+        "policy_risk_clean": {"points": 5, "passed": True},
+        "package_zip_present": {"points": 5, "passed": paths["zip"].exists()},
+    }
+
+
+def _hard_blockers(paths: dict[str, Path]) -> list[str]:
+    blockers: list[str] = []
+    required = {
+        "no package ZIP": paths["zip"],
+        "missing listing_copy": paths["listing_copy"],
+        "missing product_content": paths["product_content"],
+        "no README": paths["readme"],
+        "no manifest": paths["manifest"],
+        "no marketplace checklist": paths["marketplace_checklist"],
+    }
+    for message, path in required.items():
+        if not path.exists():
+            blockers.append(message)
+    return blockers
+
+
+def _policy_risk_scan(package_dir: Path) -> dict:
+    text_parts: list[str] = []
+    for path in package_dir.rglob("*"):
+        if path.is_file() and path.suffix.lower() in (".md", ".json", ".html", ".txt"):
+            try:
+                text_parts.append(path.read_text(encoding="utf-8", errors="ignore"))
+            except OSError:
+                continue
+    text = "\n".join(text_parts).lower()
+    high = [kw for kw in POLICY_HIGH_RISK_KEYWORDS if kw.lower() in text]
+    medium = [kw for kw in POLICY_MEDIUM_RISK_KEYWORDS if kw.lower() in text]
+    if "inspired by" in text and any(kw in text for kw in POLICY_HIGH_RISK_KEYWORDS):
+        high.append("inspired by + known brand")
+    risk_level = "high" if high else "medium" if medium else "low"
+    return {
+        "risk_level": risk_level,
+        "high_risk_keywords": sorted(set(high)),
+        "medium_risk_keywords": sorted(set(medium)),
+        "notes": "Deterministic keyword scan only; human review required before publishing.",
+    }
+
+
+def _platform_readiness(paths: dict[str, Path]) -> dict[str, dict]:
+    rules = {
+        "Gumroad": {
+            "required": ["zip", "readme", "listing_copy", "mockup_spec"],
+            "fixes": ["Add ZIP, README, listing copy, and mockup/cover spec."],
+        },
+        "Fiverr": {
+            "required": ["fiverr_brief", "visual_specs", "package_dir"],
+            "fixes": ["Add Fiverr gig brief and visual prompt/spec documents."],
+        },
+        "Payhip": {
+            "required": ["zip", "listing_copy", "preview", "pdf"],
+            "fixes": ["Add ZIP, listing copy, preview assets, and PDF pack."],
+        },
+        "Sellfy": {
+            "required": ["zip", "listing_copy", "preview", "visual_specs"],
+            "fixes": ["Add ZIP, listing copy, preview assets, and visual specs."],
+        },
+        "Pinterest": {
+            "required": ["visual_specs", "gallery_plan", "cover_prompts"],
+            "fixes": ["Add visual specs, gallery plan, and cover/mockup prompts."],
+        },
+    }
+    result: dict[str, dict] = {}
+    for platform, rule in rules.items():
+        missing = [name for name in rule["required"] if not paths[name].exists()]
+        result[platform] = {
+            "status": "ready" if not missing else "not ready",
+            "missing": missing,
+            "recommended_fixes": [] if not missing else rule["fixes"],
+        }
+    return result
+
+
+def _buyer_value_clarity(package_dir: Path) -> dict:
+    targets = [
+        package_dir / "README.md",
+        package_dir / "marketplace_checklist.md",
+        package_dir / "presentation" / "perceived_value_stack.md",
+        package_dir / "preview" / "sales_page_preview.html",
+    ]
+    text = "\n".join(path.read_text(encoding="utf-8", errors="ignore") for path in targets if path.exists()).lower()
+    signals = {
+        "has_buyer_language": any(word in text for word in ("buyer", "customer", "download", "use")),
+        "has_value_language": any(word in text for word in ("saves", "helps", "included", "what you get", "value")),
+        "has_usage_instructions": "instructions" in text or "how to use" in text,
+    }
+    score = sum(1 for passed in signals.values() if passed)
+    return {"status": "clear" if score >= 2 else "unclear", "signals": signals}
+
+
+def _missing_asset_messages(checks: dict[str, dict]) -> list[str]:
+    return [name.replace("_", " ") for name, item in checks.items() if not item["passed"]]
+
+
+def _readiness_report_markdown(report: dict) -> str:
+    lines = [
+        f"# Readiness Report - {report['title']}",
+        "",
+        f"Overall score: **{report['readiness_score']}/100**",
+        f"Status: **{report['readiness_status']}**",
+        "",
+        "## Hard Blockers",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in report["hard_blockers"] or ["None"])
+    lines.extend(["", "## Score Breakdown", ""])
+    for name, item in report["score_breakdown"].items():
+        status = "PASS" if item["passed"] else "FAIL"
+        lines.append(f"- {name.replace('_', ' ').title()}: {status} ({item['points']} pts)")
+    lines.extend([
+        "",
+        "## Policy Risk",
+        "",
+        f"Risk level: **{report['policy_risk']['risk_level']}**",
+        "",
+        "## Buyer Value Clarity",
+        "",
+        f"Status: **{report['buyer_value_clarity']['status']}**",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def _platform_readiness_markdown(platform_readiness: dict[str, dict]) -> str:
+    lines = ["# Platform Readiness", ""]
+    for platform, item in platform_readiness.items():
+        lines.extend([
+            f"## {platform}",
+            "",
+            f"Status: **{item['status']}**",
+            f"Missing: {', '.join(item['missing']) if item['missing'] else 'None'}",
+            "",
+            "Recommended fixes:",
+            "",
+        ])
+        lines.extend(f"- {fix}" for fix in item["recommended_fixes"] or ["None"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _missing_assets_markdown(checks: dict[str, dict], hard_blockers: list[str]) -> str:
+    lines = ["# Missing Assets", "", "## Hard Blockers", ""]
+    lines.extend(f"- {item}" for item in hard_blockers or ["None"])
+    lines.extend(["", "## Failed Scoring Checks", ""])
+    failed = _missing_asset_messages(checks)
+    lines.extend(f"- {item}" for item in failed or ["None"])
+    return "\n".join(lines) + "\n"
+
+
+def _policy_risk_markdown(policy: dict) -> str:
+    return "\n".join([
+        "# Policy / IP Risk Check",
+        "",
+        f"Risk level: **{policy['risk_level']}**",
+        "",
+        "## High-Risk Keywords",
+        "",
+        *(f"- {kw}" for kw in policy["high_risk_keywords"] or ["None"]),
+        "",
+        "## Medium-Risk Keywords",
+        "",
+        *(f"- {kw}" for kw in policy["medium_risk_keywords"] or ["None"]),
+        "",
+        policy["notes"],
+    ]) + "\n"
+
+
+def _improvement_plan_markdown(report: dict) -> str:
+    lines = ["# Improvement Plan", ""]
+    if report["readiness_status"] == "ready":
+        lines.append("Package is ready by deterministic checks. Human review is still required before publishing.")
+    else:
+        lines.extend([
+            "## Fix These First",
+            "",
+            *(f"- {item}" for item in report["top_blockers"]),
+            "",
+            "## Then Review",
+            "",
+            "- Mockup/cover image quality",
+            "- Marketplace policy compliance",
+            "- Listing copy accuracy",
+            "- Customer instructions and license terms",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def _update_manifest_with_quality(product_id: int, package_dir: Path, report: dict) -> None:
+    manifest_path = package_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+    else:
+        manifest = {}
+    manifest["quality_report"] = {
+        "readiness_report_json": _package_relative(package_dir / "quality" / "readiness_report.json"),
+        "readiness_report_md": _package_relative(package_dir / "quality" / "readiness_report.md"),
+        "platform_readiness": _package_relative(package_dir / "quality" / "platform_readiness.md"),
+        "missing_assets": _package_relative(package_dir / "quality" / "missing_assets.md"),
+        "policy_risk_check": _package_relative(package_dir / "quality" / "policy_risk_check.md"),
+        "improvement_plan": _package_relative(package_dir / "quality" / "improvement_plan.md"),
+    }
+    manifest["readiness_status"] = report["readiness_status"]
+    manifest["readiness_score"] = report["readiness_score"]
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _refresh_package_zip(product_id: int, package_dir: Path) -> None:
+    zip_path = PRODUCT_ROOT / f"product_{product_id}.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(package_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, arcname=path.relative_to(PRODUCT_ROOT))
+
+
+def _build_package_readme(product: dict, artifact_map: dict[str, dict]) -> str:
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    suggested_marketplaces = ["Gumroad", "Etsy", "Sellfy", "Payhip"]
+    if listing.get("etsy"):
+        suggested_marketplaces.insert(0, "Etsy")
+    included = [
+        "- `source/` Markdown source files generated from HYDRA artifacts",
+        "- `preview/` cover and sales-page HTML previews for marketplace presentation",
+        "- `presentation/` Gumroad/Fiverr/mockup/value-stack briefs",
+        "- `visual/` theme intelligence, image-slot manifest, gallery plan, and visual prompts",
+        "- `manifest.json` package metadata",
+        "- `marketplace_checklist.md` upload checklist",
+    ]
+    if _is_printable_format(product.get("production_format", "")):
+        included.append("- `printable/` clean letter-size printable HTML files")
+        included.append("- `pdf/printable_pack.pdf` simple PDF export")
+    return "\n".join([
+        f"# {product.get('title')}",
+        "",
+        f"Production format: {product.get('production_format') or 'digital download'}",
+        f"Suggested marketplace: {', '.join(dict.fromkeys(suggested_marketplaces))}",
+        "",
+        "## What Is Included",
+        "",
+        *included,
+        "",
+        "## Usage Instructions",
+        "",
+        "Use the ZIP for marketplace upload. Review the printable HTML and PDF files before publishing. Use the preview and presentation assets to create listing images/mockups manually.",
+        "",
+        "## Customer Instructions",
+        "",
+        "Download the ZIP, unzip it, then open or print the included files for personal use.",
+        "",
+        "## License Note",
+        "",
+        "Personal use only unless the operator changes this license before publishing.",
+    ])
+
+
+def _build_marketplace_checklist(product: dict, artifact_map: dict[str, dict]) -> str:
+    listing = _artifact_json(artifact_map.get("listing_copy"))
+    etsy = listing.get("etsy") or {}
+    gumroad = listing.get("gumroad") or {}
+    tags = etsy.get("tags") or []
+    if isinstance(tags, list):
+        tags_text = ", ".join(str(tag) for tag in tags)
+    else:
+        tags_text = str(tags)
+    return "\n".join([
+        f"# Marketplace Upload Checklist — {product.get('title')}",
+        "",
+        "## Gumroad",
+        "",
+        "- Listing copy source: `source/listing_copy.md`",
+        f"- Suggested title: {gumroad.get('title', product.get('title'))}",
+        f"- Suggested price: ${product.get('price')}",
+        "",
+        "## Etsy",
+        "",
+        f"- Title: {etsy.get('title', '')}",
+        f"- Tags: {tags_text}",
+        f"- Category hint: {etsy.get('category_hint', '')}",
+        "",
+        "## Files To Upload",
+        "",
+        f"- `product_{product.get('id')}.zip`",
+        "- `pdf/printable_pack.pdf` when a direct PDF upload is preferred.",
+        "- Printable HTML files can still be printed to PDF manually if layout review requires it.",
+        "",
+        "## Presentation Assets",
+        "",
+        "- Cover direction: `preview/cover_preview.html`",
+        "- Sales page framing: `preview/sales_page_preview.html`",
+        "- Gumroad/Fiverr/mockup briefs: `presentation/`",
+        "- Visual theme and image-slot manifest: `visual/`",
+        "",
+        "## Required Human Review",
+        "",
+        "- Image/mockup still required.",
+        "- Confirm spelling, layout, and marketplace policy compliance.",
+        "- Confirm no medical, legal, financial, political, IP, or trademark issues.",
+        "- Publish manually only after review.",
+    ])
+
+
+# ---- HackerNews collector --------------------------------------------------
+
+HN_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date"
+HN_DEFAULT_QUERY = "AI"
+HN_MAX_HITS = 12
+
+
+def _hn_demand_velocity(points: int, comments: int) -> float:
+    raw = points * 1.2 + comments * 1.5
+    return float(min(100.0, raw))
+
+
+# Sprint 1.3 — keyword-based classifier. NO LLM. Order matters: more specific first.
+_HN_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("agent", "copilot", "cursor", "claude code", "cline", "codex", "aider", "devin"),
+     "AI coding tools", "cheat sheet PDF"),
+    (("rag ", "retrieval augmented", "vector db", "embedding", "pgvector"),
+     "AI infrastructure", "cheat sheet PDF"),
+    (("llm", "language model", " gpt", " gpt-", "chatgpt", "claude ", " claude.", "gemini", "anthropic", "openai"),
+     "AI tools", "prompt pack"),
+    (("kubernetes", "k8s", "terraform", "ansible", "ci/cd", "github actions", "devops", "sre "),
+     "DevOps", "cheat sheet PDF"),
+    (("postgres", "sqlite", "mysql", "mariadb", "duckdb", "database", " sql ", "sqlalchemy"),
+     "Databases", "cheat sheet PDF"),
+    (("react", "next.js", "nextjs", "vue", "svelte", "tailwind", "frontend"),
+     "Frontend", "cheat sheet PDF"),
+    (("rust", "golang", "go ", "python", "typescript", "deno", "bun"),
+     "Programming languages", "prompt pack"),
+    (("security", "vulnerability", "exploit", "infosec", "cve", "pentest"),
+     "Security", "checklist PDF"),
+    (("startup", " yc ", " y combinator", "founder", "saas", "indie hackers"),
+     "Startup playbooks", "Notion template"),
+    (("homelab", "self-host", "selfhosted", "self host"),
+     "Homelab", "cheat sheet PDF"),
+    (("notion", "obsidian", "logseq"),
+     "Knowledge management", "Notion template"),
+)
+
+
+def _hn_classify_rules(title: str) -> tuple[str, str]:
+    """Return (vertical, production_format). Falls back to AI tools / cheat sheet PDF."""
+    t = title.lower()
+    for needles, vertical, fmt in _HN_RULES:
+        if any(n in t for n in needles):
+            return vertical, fmt
+    return "AI tools", "cheat sheet PDF"
+
+
+def _hn_classify(title: str, snippet: str = "", db=None):
+    """Classify HN story. LLM attempts fall back to the Sprint 1.3 keyword router."""
+    if db is None:
+        vertical, fmt = _hn_classify_rules(title)
+        return vertical, fmt
+
+    schema = {
+        "vertical": "AI coding tools",
+        "production_format": "cheat sheet PDF",
+        "topic_normalized": "Safe AI Coding Agent Workflow",
+        "monetization_angle": "rollback workflows and prompt guardrails for developers",
+        "risk_flags": ["none"],
+    }
+    system_prompt = (
+        "Given a HackerNews story title and snippet, classify the buyer audience and best digital-product format. "
+        "Return strict JSON only. Do not recommend political, medical, financial, or legal advice products unless "
+        "risk_flags names the risk. Do not suggest trademark-copying products."
+    )
+    user_prompt = f"Title: {title}\nSnippet: {snippet or '(none)'}"
+    try:
+        data = call_llm_json(
+            db,
+            purpose="hn_classification",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema_hint=schema,
+            max_cost_usd=0.0005,
+            timeout_seconds=20,
+        )
+        vertical = str(data.get("vertical") or "").strip()
+        fmt = str(data.get("production_format") or "").strip()
+        if not vertical or not fmt:
+            raise ValueError("Missing vertical or production_format")
+        risk_flags = data.get("risk_flags")
+        if _looks_like_regulated_advice(vertical, title) and not risk_flags:
+            data["risk_flags"] = ["regulated-advice-risk"]
+        return vertical[:80], fmt[:80], data
+    except (LlmBlocked, LlmFailed, ValueError):
+        vertical, fmt = _hn_classify_rules(title)
+        return vertical, fmt, None
+
+
+def _looks_like_regulated_advice(vertical: str, title: str) -> bool:
+    text = f"{vertical} {title}".lower()
+    return any(
+        word in text
+        for word in ("medical", "health", "legal", "law", "financial", "invest", "political")
+    )
+
+
+def _hn_to_candidate(hit: dict, db=None) -> dict | None:
+    title = (hit.get("title") or "").strip()
+    if not title:
+        return None
+    points = int(hit.get("points") or 0)
+    comments = int(hit.get("num_comments") or 0)
+    url = (hit.get("url") or "").strip()
+    created = hit.get("created_at") or ""
+    snippet = (hit.get("story_text") or hit.get("comment_text") or "").strip()
+    classified = _hn_classify(title, snippet, db)
+    if len(classified) == 2:
+        vertical, production_format = classified
+        llm_meta = None
+    else:
+        vertical, production_format, llm_meta = classified
+    evidence = (
+        f"HN story '{title}' with {points} points and {comments} comments "
+        f"({created}). Link: {url or 'n/a'}. Classified as {vertical} / {production_format}."
+    )
+    if llm_meta:
+        evidence += (
+            f" LLM normalized topic: {llm_meta.get('topic_normalized', 'n/a')}. "
+            f"Monetization angle: {llm_meta.get('monetization_angle', 'n/a')}. "
+            f"Risk flags: {', '.join(llm_meta.get('risk_flags') or ['none'])}."
+        )
+    candidate = {
+        "source": "HackerNews",
+        "topic": title[:200],
+        "vertical": vertical,
+        "production_format": production_format,
+        "demand_velocity": _hn_demand_velocity(points, comments),
+        "monetization_fit": 60,
+        "ai_exploitability": 75,
+        "cross_source_confirmation": 30,  # single source — gates against premature acting
+        "time_to_revenue": 70,
+        "saturation_penalty": 30,
+        "platform_risk_penalty": 20,
+        "evidence": evidence,
+    }
+    candidate["score"] = calculate_score(candidate)
+    return candidate
+
+
+@app.post("/opportunities/collect/hn")
+def collect_hn(query: str = Form(HN_DEFAULT_QUERY)):
+    """Fetch recent HN stories matching `query` and seed candidates."""
+    try:
+        assert_system_can_act("collect_hn")
+    except SystemActionBlocked as exc:
+        return JSONResponse(
+            {"blocked": True, "action": "collect_hn", "reason": str(exc)},
+            status_code=423,
+        )
+
+    params = {"tags": "story", "query": query or HN_DEFAULT_QUERY}
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(HN_SEARCH_URL, params=params)
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"HN fetch failed: {exc}") from exc
+
+    hits = payload.get("hits", [])[:HN_MAX_HITS]
+    inserted = 0
+    skipped = 0
+    with session_scope() as session:
+        candidates = [c for c in (_hn_to_candidate(h, session) for h in hits) if c]
+        for candidate in candidates:
+            exists = session.scalar(
+                select(OpportunityCandidate.id).where(
+                    OpportunityCandidate.source == candidate["source"],
+                    OpportunityCandidate.topic == candidate["topic"],
+                    OpportunityCandidate.vertical == candidate["vertical"],
+                )
+            )
+            if exists:
+                skipped += 1
+                continue
+            session.add(OpportunityCandidate(**candidate))
+            inserted += 1
+
+    return {
+        "source": "HackerNews",
+        "query": query or HN_DEFAULT_QUERY,
+        "fetched": len(hits),
+        "scored": len(candidates),
+        "inserted": inserted,
+        "skipped": skipped,
+        "fetched_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+# ---- Launch dashboard ------------------------------------------------------
+
+
+@app.get("/launch")
+def launch_dashboard(request: Request):
+    with session_scope() as session:
+        approved_count = session.scalar(
+            select(func.count(OpportunityCandidate.id)).where(
+                OpportunityCandidate.status == "approved"
+            )
+        ) or 0
+        products_count = session.scalar(select(func.count(Product.id))) or 0
+        live_count = session.scalar(
+            select(func.count(Product.id)).where(Product.status == "live")
+        ) or 0
+
+        missing_url_rows = session.scalars(
+            select(Product)
+            .where(Product.status.in_(("live", "listed")))
+            .where(
+                (Product.gumroad_url.is_(None)) | (func.trim(Product.gumroad_url) == "")
+            )
+            .order_by(desc(Product.created_at))
+        ).all()
+
+        total_revenue = session.scalar(
+            select(func.coalesce(func.sum(RevenueEvent.amount), 0))
+        ) or 0
+
+        top_opportunities = session.scalars(
+            select(OpportunityCandidate)
+            .order_by(desc(OpportunityCandidate.score))
+            .limit(5)
+        ).all()
+        latest_products = session.scalars(
+            select(Product).order_by(desc(Product.created_at)).limit(5)
+        ).all()
+
+        # Sprint 1.3 — channel rollup (revenue grouped by channel_tag).
+        # Group by the raw column; coalesce NULL → "(unattributed)" only in SELECT.
+        channel_rows_raw = session.execute(
+            select(
+                RevenueEvent.channel_tag,
+                func.coalesce(func.sum(RevenueEvent.amount), 0).label("total"),
+                func.count(RevenueEvent.id).label("events"),
+            )
+            .group_by(RevenueEvent.channel_tag)
+            .order_by(desc("total"))
+        ).all()
+        channel_rows = [
+            {"channel": (row.channel_tag or "(unattributed)"),
+             "total": row.total,
+             "events": row.events}
+            for row in channel_rows_raw
+        ]
+
+        # Sprint 1.3 — live products that have no published distribution post.
+        # Subquery: product_ids that DO have at least one published distribution_post.
+        published_product_ids = session.scalars(
+            select(ProductArtifact.product_id)
+            .where(ProductArtifact.artifact_type == "distribution_post")
+            .where(ProductArtifact.published_url.is_not(None))
+            .where(ProductArtifact.published_url != "")
+            .distinct()
+        ).all()
+        missing_distribution = session.scalars(
+            select(Product)
+            .where(Product.status == "live")
+            .where(~Product.id.in_(published_product_ids) if published_product_ids else True)
+            .order_by(desc(Product.created_at))
+        ).all()
+
+        return templates.TemplateResponse(
+            "launch.html",
+            {
+                "request": request,
+                "approved_count": approved_count,
+                "products_count": products_count,
+                "live_count": live_count,
+                "missing_url_products": missing_url_rows,
+                "missing_url_count": len(missing_url_rows),
+                "missing_distribution": missing_distribution,
+                "missing_distribution_count": len(missing_distribution),
+                "channel_rows": channel_rows,
+                "total_revenue": total_revenue,
+                "kill_switch_active": is_kill_switch_active(),
+                "daily_budget": get_daily_budget(),
+                "top_opportunities": top_opportunities,
+                "latest_products": latest_products,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1.3 — distribution publish tracking
+# ---------------------------------------------------------------------------
+
+
+@app.post("/products/{product_id}/artifacts/{artifact_id}/publish")
+def mark_artifact_published(
+    product_id: int,
+    artifact_id: int,
+    published_url: str = Form(...),
+    channel_tag: str = Form(""),
+):
+    """Record that a distribution_post artifact has been published in a channel."""
+    url = (published_url or "").strip()
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="published_url must start with http:// or https://",
+        )
+    with session_scope() as session:
+        artifact = session.get(ProductArtifact, artifact_id)
+        if not artifact or artifact.product_id != product_id:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        artifact.published_url = url or None
+        artifact.published_at = datetime.utcnow() if url else None
+        artifact.channel_tag = (channel_tag or "").strip().lower() or None
+    return RedirectResponse(url=f"/products/{product_id}/edit", status_code=303)
+
+# ---------------------------------------------------------------------------
+# Sprint 1.5 — In-process agentic generation (multi-marketplace aware)
+# ---------------------------------------------------------------------------
+# Philosophy: all generation flows through the guarded app/llm.py client.
+# Each route saves one ProductArtifact. Human reviews and advances each step.
+# No publishing, no auto-spending beyond budget-capped LLM calls.
+# Target marketplaces from day one: Gumroad, Etsy, Sellfy, Payhip.
+# ---------------------------------------------------------------------------
+
+_STEP_REQUIRES: dict[str, str | None] = {
+    "outline":           None,
+    "product_content":   "outline",
+    "listing_copy":      "product_content",
+    "qa_review":         "product_content",
+    "distribution_post": "listing_copy",
+}
+
+
+def _latest_artifact(session, product_id: int, artifact_type: str):
+    """Return the most recent artifact of the given type, or None."""
+    return session.scalar(
+        select(ProductArtifact)
+        .where(ProductArtifact.product_id == product_id)
+        .where(ProductArtifact.artifact_type == artifact_type)
+        .order_by(desc(ProductArtifact.created_at))
+    )
+
+
+def _generation_redirect(product_id: int, flash: str, step: str, msg: str = "",
+                          provider: str = "", model: str = "", cost: str = "") -> RedirectResponse:
+    """Build a flash-param redirect back to the product edit page."""
+    from urllib.parse import urlencode
+    params = {"flash": flash, "step": step}
+    if msg:
+        params["msg"] = msg
+    if provider:
+        params["provider"] = provider
+    if model:
+        params["model"] = model
+    if cost:
+        params["cost"] = cost
+    return RedirectResponse(
+        url=f"/products/{product_id}/edit?{urlencode(params)}", status_code=303
+    )
+
+
+def _last_llm_call_meta(session) -> dict:
+    """Return provider/model/cost from the most recent LlmCall row."""
+    call = session.scalar(select(LlmCall).order_by(desc(LlmCall.created_at)))
+    if not call:
+        return {}
+    return {
+        "provider": call.provider or "",
+        "model": call.model or "",
+        "cost": f"{float(call.cost_usd):.6f}" if call.cost_usd else "0",
+    }
+
+
+def _generation_error(action: str, status: str, message: str) -> JSONResponse:
+    """Legacy JSON error — kept for API callers. UI routes use _generation_redirect() instead."""
+    return JSONResponse({"status": status, "action": action, "message": message})
+
+
+def _artifact_context(session, product_id: int, artifact_type: str) -> dict:
+    """Parse latest artifact JSON of given type; return {} on miss or decode error."""
+    art = _latest_artifact(session, product_id, artifact_type)
+    if not art:
+        return {}
+    try:
+        return json.loads(art.content)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+@app.post("/products/{product_id}/generate/outline")
+def generate_outline(product_id: int):
+    """Step 1: generate a multi-marketplace product outline from the opportunity signal."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        candidate = session.get(OpportunityCandidate, product.opportunity_id) if product.opportunity_id else None
+
+        schema = {
+            "product_title": "string",
+            "tagline": "string",
+            "buyer_persona": "string",
+            "core_pain_solved": "string",
+            "deliverable_sections": [
+                {"title": "string", "purpose": "string", "estimated_length": "string"}
+            ],
+            "etsy_keyword_angle": "string",
+            "gumroad_hook": "string",
+            "risk_notes": "none",
+        }
+        system_prompt = (
+            "You are HYDRA's Product Architect. Produce a commercially-focused digital download outline "
+            "targeting Gumroad, Etsy, Sellfy, and Payhip buyers simultaneously. Return strict JSON only. "
+            "The product must be a standalone download — no upsells or sign-up walls. "
+            "Do not recommend medical, legal, financial, or political advice without flagging risk_notes. "
+            "Do not imitate or copy copyrighted properties."
+        )
+        evidence = (candidate.evidence if candidate else None) or product.notes or "(none)"
+        user_prompt = (
+            f"Topic: {product.title}\n"
+            f"Vertical: {candidate.vertical if candidate else 'general'}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Price target: ${product.price}\n"
+            f"Target marketplaces: Gumroad, Etsy, Sellfy, Payhip\n"
+            f"Signal evidence: {evidence}\n\n"
+            "deliverable_sections: 4-8 items. "
+            "etsy_keyword_angle: one sentence on the SEO keyword angle for Etsy title and tags. "
+            "gumroad_hook: one sentence opening hook for the Gumroad/Sellfy description. "
+            "risk_notes: 'none' or a description of any IP, legal, or platform-policy risk."
+        )
+        try:
+            data = call_llm_json(session, "outline", system_prompt, user_prompt, schema, max_cost_usd=0.003)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="outline",
+                title=f"Outline: {data.get('product_title', product.title)}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:outline",
+            ))
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "outline", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "outline", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "outline", msg=str(exc)[:200])
+
+
+@app.post("/products/{product_id}/generate/content")
+def generate_content(product_id: int):
+    """Step 2: write complete buyer-ready content for every section in the outline."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "outline"):
+            return _generation_redirect(product_id, "blocked", "product_content", msg="Complete step 1 (Outline) first.")
+
+        outline = _artifact_context(session, product_id, "outline")
+        sections = outline.get("deliverable_sections") or []
+        sections_text = "\n".join(
+            f"- {s.get('title', 'Section')}: {s.get('purpose', '')} ({s.get('estimated_length', '')})"
+            for s in sections
+        ) or "(no sections in outline — regenerate outline)"
+
+        schema = {
+            "sections": [{"title": "string", "content": "string"}],
+            "total_word_count_estimate": 0,
+        }
+        system_prompt = (
+            "You are HYDRA's Product Writer. Write complete, buyer-ready content for every section listed. "
+            "This is a finished product — not a draft, skeleton, or template with blanks. "
+            "Every section must be fully written. Never write placeholder text like [INSERT HERE]. "
+            "Do not include medical, legal, financial, or political advice. Return strict JSON only."
+        )
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Buyer persona: {outline.get('buyer_persona', 'buyer')}\n"
+            f"Core pain solved: {outline.get('core_pain_solved', '')}\n"
+            f"Target marketplaces: Gumroad, Etsy, Sellfy, Payhip\n\n"
+            f"Sections to write:\n{sections_text}\n\n"
+            "Return one JSON object per section with its full written content. Aim for publication quality."
+        )
+        try:
+            data = call_llm_json(session, "product_content", system_prompt, user_prompt, schema, max_cost_usd=0.012)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="product_content",
+                title=f"Content: {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:content",
+            ))
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "product_content", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "product_content", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "product_content", msg=str(exc)[:200])
+
+
+@app.post("/products/{product_id}/generate/listing")
+def generate_listing(product_id: int):
+    """Step 3: generate platform-optimized listing copy for all four storefronts."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "product_content"):
+            return _generation_redirect(product_id, "blocked", "listing_copy", msg="Complete step 2 (Product Content) first.")
+
+        outline = _artifact_context(session, product_id, "outline")
+        content_data = _artifact_context(session, product_id, "product_content")
+        sections = content_data.get("sections") or []
+        content_preview = " ".join(
+            s.get("content", "")[:400] for s in sections[:3]
+        )[:1000]
+
+        schema = {
+            "gumroad": {"title": "string", "description": "string", "tags": ["string"]},
+            "etsy": {
+                "title": "string",
+                "description": "string",
+                "tags": ["string"] * 13,
+                "category_hint": "string",
+            },
+            "sellfy": {"title": "string", "description": "string"},
+            "payhip": {"title": "string", "description": "string"},
+            "universal": {"short_description": "string", "tagline": "string"},
+        }
+        system_prompt = (
+            "You are HYDRA's Marketplace Copywriter specializing in digital downloads sold across multiple storefronts. "
+            "Rules by platform:\n"
+            "Gumroad: title 60-80 chars, description 300-600 words, conversational and benefit-led, tags optional.\n"
+            "Etsy: title MUST be under 140 chars starting with the primary search keyword buyers type; "
+            "exactly 13 tags each under 20 chars, comma-separated, covering every keyword angle; "
+            "description 400-600 words, keyword-rich, explains what buyer gets, format, and primary use cases.\n"
+            "Sellfy: title under 80 chars, description 200-350 words, punchy and conversion-focused.\n"
+            "Payhip: title under 80 chars, description 200-300 words, friendly and benefit-first.\n"
+            "universal.short_description: under 160 chars, usable as a tweet or meta description.\n"
+            "Do not fabricate reviews, statistics, or credentials. No medical/legal/financial advice. "
+            "Return strict JSON only."
+        )
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Price: ${product.price}\n"
+            f"Buyer persona: {outline.get('buyer_persona', '')}\n"
+            f"Core pain solved: {outline.get('core_pain_solved', '')}\n"
+            f"Tagline: {outline.get('tagline', '')}\n"
+            f"Etsy keyword angle: {outline.get('etsy_keyword_angle', '')}\n"
+            f"Gumroad hook: {outline.get('gumroad_hook', '')}\n"
+            f"Content preview: {content_preview}\n\n"
+            "Generate listing copy for all four storefronts plus universal fields."
+        )
+        try:
+            data = call_llm_json(session, "listing_copy", system_prompt, user_prompt, schema, max_cost_usd=0.006)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="listing_copy",
+                title=f"Listing Copy (Gumroad + Etsy + Sellfy + Payhip): {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:listing",
+            ))
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "listing_copy", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "listing_copy", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "listing_copy", msg=str(exc)[:200])
+
+
+@app.post("/products/{product_id}/generate/qa")
+def generate_qa(product_id: int):
+    """Step 4: adversarial QA review using the alternate provider as critic."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "product_content"):
+            return _generation_redirect(product_id, "blocked", "qa_review", msg="Complete step 2 (Product Content) first.")
+
+        content_data = _artifact_context(session, product_id, "product_content")
+        listing_data = _artifact_context(session, product_id, "listing_copy")
+        sections = content_data.get("sections") or []
+        content_preview = "\n\n".join(
+            f"## {s.get('title', '')}\n{s.get('content', '')[:700]}"
+            for s in sections[:4]
+        )[:2500]
+        gumroad_desc = (listing_data.get("gumroad") or {}).get("description", "")[:800]
+        etsy_title = (listing_data.get("etsy") or {}).get("title", "")
+        etsy_tags = (listing_data.get("etsy") or {}).get("tags", [])
+
+        schema = {
+            "score": 0,
+            "publishable": True,
+            "blocking_issues": ["string"],
+            "non_blocking_suggestions": ["string"],
+            "slop_phrases_found": ["string"],
+            "risk_flags": ["string"],
+            "etsy_tag_issues": ["string"],
+        }
+        system_prompt = (
+            "You are an adversarial quality reviewer for a digital download marketplace seller. "
+            "Buyers paid real money. Be skeptical and specific. Never be generous out of politeness. "
+            "Score: 90+ = publish-ready; 70-89 = publishable with minor edits; below 70 = revise first. "
+            "publishable: true only if score >= 70 AND no blocking issues. Return strict JSON only."
+        )
+        etsy_tag_text = ", ".join(etsy_tags) if etsy_tags else "(no tags generated)"
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Price: ${product.price}\n\n"
+            f"Content (first 4 sections):\n{content_preview}\n\n"
+            f"Gumroad description:\n{gumroad_desc}\n\n"
+            f"Etsy title: {etsy_title}\n"
+            f"Etsy tags: {etsy_tag_text}\n\n"
+            "Evaluate: (1) title vs content match, (2) hallucinated facts or tool names, "
+            "(3) incomplete/skeleton sections, (4) AI slop phrases, "
+            "(5) IP/trademark/regulated-advice risks, (6) Gumroad listing honestly represents the product, "
+            "(7) Etsy title starts with primary keyword and is under 140 chars, "
+            "(8) Etsy tags: exactly 13, each under 20 chars, no duplicates. "
+            "List every blocking issue separately in blocking_issues."
+        )
+        try:
+            # QA uses reverse_providers so it critiques with the alternate model family
+            data = call_llm_json(
+                session, "qa_review", system_prompt, user_prompt, schema,
+                max_cost_usd=0.006, reverse_providers=True,
+            )
+            score = data.get("score", 0)
+            publishable = data.get("publishable", False)
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="qa_review",
+                title=f"QA Review (score={score}, publishable={publishable}): {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:qa",
+            ))
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(
+                product_id, "success", "qa_review",
+                msg=f"Score {score} — publishable: {publishable}",
+                **meta,
+            )
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "qa_review", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "qa_review", msg=str(exc)[:200])
+
+
+@app.post("/products/{product_id}/generate/distribution")
+def generate_distribution(product_id: int):
+    """Step 5: generate platform-native launch posts across Reddit, X, HN, IndieHackers."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not _latest_artifact(session, product_id, "listing_copy"):
+            return _generation_redirect(product_id, "blocked", "distribution_post", msg="Complete step 3 (Listing Copy) first.")
+
+        outline = _artifact_context(session, product_id, "outline")
+        listing_data = _artifact_context(session, product_id, "listing_copy")
+        universal = listing_data.get("universal") or {}
+        gumroad_url = (product.gumroad_url or "").strip() or "TBD — add Gumroad URL to product before posting"
+
+        schema = {
+            "reddit": {
+                "suggested_subreddits": ["string"],
+                "title": "string",
+                "body": "string",
+            },
+            "twitter_x": {
+                "thread_hook": "string",
+                "thread_body": "string",
+            },
+            "hn_show_hn": {
+                "title": "string",
+                "comment": "string",
+            },
+            "indiehackers": {
+                "title": "string",
+                "body": "string",
+            },
+            "operator_notes": "string",
+        }
+        system_prompt = (
+            "You are HYDRA's Distribution Writer. Write launch posts for digital products that feel "
+            "completely native to each platform. Lead with value, never with the product itself. "
+            "You are a real person sharing something genuinely useful — not a marketer.\n"
+            "Reddit: add real value first; mention the product softly at the end; link as postscript. "
+            "Suggest 2-3 specific subreddits where this exact audience lives.\n"
+            "Twitter/X: thread_hook under 280 chars (strong hook that stands alone); "
+            "thread_body 2-4 follow-up tweets separated by a blank line.\n"
+            "HN Show HN: title as 'Show HN: ...' with technical framing; honest, no hype; "
+            "comment provides context and link.\n"
+            "IndieHackers: builder story angle — what you noticed, what you built, what you learned; "
+            "community-first, link at the end.\n"
+            "operator_notes: one sentence of platform-specific advice the human should remember before posting.\n"
+            "NEVER write fake social proof, engagement-bait, or fabricated statistics. "
+            "Return strict JSON only."
+        )
+        user_prompt = (
+            f"Product title: {product.title}\n"
+            f"Tagline: {universal.get('short_description', outline.get('tagline', ''))}\n"
+            f"Production format: {product.production_format or 'digital download'}\n"
+            f"Buyer persona: {outline.get('buyer_persona', '')}\n"
+            f"Core pain solved: {outline.get('core_pain_solved', '')}\n"
+            f"Gumroad URL: {gumroad_url}\n\n"
+            "Generate platform-specific launch posts. The operator will review and post manually. "
+            "No post should be copy-pasted across platforms — each must be rewritten for its audience."
+        )
+        try:
+            data = call_llm_json(
+                session, "distribution_post", system_prompt, user_prompt, schema, max_cost_usd=0.006
+            )
+            session.add(ProductArtifact(
+                product_id=product_id,
+                artifact_type="distribution_post",
+                title=f"Distribution Posts (Reddit / X / HN / IH): {product.title}",
+                content=json.dumps(data, indent=2),
+                source="hydra-llm:distribution",
+            ))
+            meta = _last_llm_call_meta(session)
+            return _generation_redirect(product_id, "success", "distribution_post", **meta)
+        except LlmBlocked as exc:
+            return _generation_redirect(product_id, "blocked", "distribution_post", msg=str(exc)[:200])
+        except LlmFailed as exc:
+            return _generation_redirect(product_id, "error", "distribution_post", msg=str(exc)[:200])

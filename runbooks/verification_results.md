@@ -153,3 +153,49 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | Product 43 manifest | PASS — `package_version` is `2.0`; tracks `visual_assets` and `visual_theme` |
 | Product 43 theme classification | PASS — `adhd_focus` |
 | Target platforms | PASS — Fiverr, Gumroad, Pinterest, Sellfy, Payhip |
+
+---
+
+## Sprint 2.1 — 2026-05-10
+
+| Check | Result |
+|---|---|
+| `./scripts/preflight_check.sh` | PASS |
+| `bash scripts/verify_sprint21.sh` | PASS — 13/13 |
+| `LIVE=1 bash scripts/verify_sprint21.sh` | PASS — 25/25 |
+| `bash scripts/verify_sprint20.sh` | PASS — 13/13 |
+| `LIVE=1 bash scripts/verify_sprint20.sh` | PASS — 26/26 |
+| Product 43 quality files | PASS — all six files exist |
+| Product 43 readiness score | PASS — 100 |
+| Product 43 readiness status | PASS — ready |
+| Product 43 blockers | PASS — none |
+| Product edit readiness UI | PASS |
+
+---
+
+## Sprint 2.2 — 2026-05-10
+
+| Check | Result |
+|---|---|
+| `python3 -m py_compile app/main.py app/db.py app/llm.py app/kit_covers.py app/kit_generator.py app/kit_routes.py scripts/build_product43_kit.py` | PASS |
+| `bash scripts/verify_sprint22.sh` | PASS — 62/62 |
+| `BUILD=1 bash scripts/verify_sprint22.sh` | PASS — 66/66 |
+| Temp venv app import | PASS — 5 kit routes registered |
+| Temp venv full kit build | PASS — 8 HTML, 9 PDFs, 9 SVG covers, 1 ZIP |
+| `./scripts/preflight_check.sh` | FAIL in current environment — Docker CLI unavailable; old app still answers `/health` |
+| `LIVE=1 bash scripts/verify_sprint22.sh` | BLOCKED — port 8000 served an older app returning 404 for `/kits/43` |
+
+---
+
+## Sprint 2.3 — 2026-05-11
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint23.sh` | PASS — 42/42 |
+| `LIVE=1 bash scripts/verify_sprint22.sh` | PASS — 64/64 |
+| `bash scripts/verify_sprint23_llm_persistence.sh` | PASS — 7/7 |
+| Product 43 regeneration route | PASS — 303 redirect with `LLM content` |
+| `kit_generation_report.json` | PASS — `llm_used=true`, `fallback_used=false`, 8 LLM docs, 0 fallback docs |
+| `llm_calls` persistence | PASS — `kit_doc_sections|8` |
+| Placeholder scan | PASS — no `CONTENT PENDING` or `LLM generation was not available` |
+| Product 43 kit assets | PASS — 8 HTML, 8 individual kit PDFs, master PDF, delivery ZIP |

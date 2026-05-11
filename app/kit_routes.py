@@ -10,10 +10,13 @@ All LLM calls go through the existing guarded llm layer (imported from llm.py).
 """
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -42,10 +45,17 @@ def _get_llm_caller(db):
     """
     try:
         from kit_llm_adapter import make_kit_llm_caller
-        return make_kit_llm_caller(db)
+        caller = make_kit_llm_caller(db)
+        logger.info("[kit_routes] LLM caller acquired: make_kit_llm_caller")
+        return caller
+    except ImportError as exc:
+        logger.error(
+            "[kit_routes] CRITICAL: kit_llm_adapter import failed — "
+            "container may be running stale image. Rebuild required. Error: %s", exc
+        )
+        return None
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning("kit_llm_adapter unavailable: %s", exc)
+        logger.error("[kit_routes] LLM adapter init failed: %s: %s", type(exc).__name__, exc)
         return None
 
 
@@ -76,6 +86,15 @@ async def kit_detail(request: Request, product_id: int):
     flash = request.query_params.get("flash")
     msg   = request.query_params.get("msg", "")
 
+    # Load last generation report if present
+    report = None
+    report_path = product_dir / "kit_generation_report.json"
+    if report_path.exists():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
     return templates.TemplateResponse("kit_status.html", {
         "request":     request,
         "product":     product,
@@ -86,6 +105,7 @@ async def kit_detail(request: Request, product_id: int):
         "zip_file":    zip_f.name if zip_f else None,
         "flash":       flash,
         "msg":         msg,
+        "report":      report,
     })
 
 
@@ -124,17 +144,19 @@ async def generate_kit_route(
 
     try:
         started_at = time.monotonic()
-        results = generate_kit(
-            product_id=product_id,
-            niche=niche,
-            niche_context=niche_context or f"Professional real estate agents seeking AI implementation guidance",
-            kit_name=kit_name,
-            kit_tagline=kit_tagline,
-            kit_edition=kit_edition,
-            theme=theme,
-            products_root=PRODUCTS_ROOT,
-            llm_call_fn=_get_llm_caller(session),
-        )
+        with SessionLocal() as generation_session:
+            results = generate_kit(
+                product_id=product_id,
+                niche=niche,
+                niche_context=niche_context or f"Professional real estate agents seeking AI implementation guidance",
+                kit_name=kit_name,
+                kit_tagline=kit_tagline,
+                kit_edition=kit_edition,
+                theme=theme,
+                products_root=PRODUCTS_ROOT,
+                llm_call_fn=_get_llm_caller(generation_session),
+            )
+            generation_session.commit()
 
         with SessionLocal() as session:
             lc = session.get(LlmCall, llm_call_id)
@@ -147,10 +169,18 @@ async def generate_kit_route(
 
         pdf_count = len(results["pdfs"])
         err_count = len(results["errors"])
-        msg = f"Kit generated: {pdf_count} PDFs"
+        llm_used  = results.get("llm_used", False)
+        fallback  = results.get("fallback_docs", [])
+        if llm_used and not fallback:
+            msg = f"Kit generated: {pdf_count} PDFs — LLM content ✓"
+        elif llm_used and fallback:
+            msg = f"Kit generated: {pdf_count} PDFs — LLM partial ({len(fallback)} docs used fallback)"
+        else:
+            msg = f"Kit generated: {pdf_count} PDFs — FALLBACK ONLY (no LLM content)"
         if err_count:
-            msg += f" ({err_count} warnings)"
-        return _flash_redirect(f"/kits/{product_id}", "success", msg)
+            msg += f" | {err_count} error(s) — check logs"
+        level = "success" if llm_used else "warning"
+        return _flash_redirect(f"/kits/{product_id}", level, msg)
 
     except Exception as e:
         with SessionLocal() as session:

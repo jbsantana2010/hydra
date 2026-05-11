@@ -7,10 +7,13 @@ All LLM calls go through the existing guarded llm.py layer.
 """
 
 import json
+import logging
 import os
 import zipfile
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 # ── Kit document definitions ──────────────────────────────────────────────────
 KIT_DOCUMENTS = [
@@ -411,12 +414,15 @@ def generate_kit(
     }
 
     results = {
-        "product_dir": str(product_dir),
-        "pdfs":        [],
-        "html_files":  [],
-        "zip_path":    None,
-        "covers":      {},
-        "errors":      [],
+        "product_dir":    str(product_dir),
+        "pdfs":           [],
+        "html_files":     [],
+        "zip_path":       None,
+        "covers":         {},
+        "errors":         [],
+        "llm_used":       False,
+        "fallback_docs":  [],
+        "llm_docs":       [],
     }
 
     # 1. Generate SVG covers
@@ -447,6 +453,7 @@ def generate_kit(
 
         # Call LLM for sections
         sections = []
+        doc_used_llm = False
         if llm_call_fn:
             try:
                 user_prompt = _sections_prompt(doc_def["prompt_key"], niche, niche_context)
@@ -465,10 +472,19 @@ def generate_kit(
                     sections = parsed.get("sections", parsed) if isinstance(parsed, dict) else parsed
                 if not sections:
                     raise ValueError("LLM returned zero sections")
+                doc_used_llm = True
+                results["llm_used"] = True
+                results["llm_docs"].append(num)
+                logger.info("[kit] Doc %s: LLM generated %d sections", num, len(sections))
             except Exception as e:
-                results["errors"].append(f"Doc {num} LLM error: {e}")
+                err_msg = f"Doc {num} LLM error: {type(e).__name__}: {e}"
+                results["errors"].append(err_msg)
+                results["fallback_docs"].append(num)
+                logger.warning("[kit] Doc %s: LLM FAILED — using fallback. Error: %s", num, e)
                 sections = _fallback_sections(doc_def)
         else:
+            results["fallback_docs"].append(num)
+            logger.info("[kit] Doc %s: no llm_call_fn — using fallback", num)
             sections = _fallback_sections(doc_def)
 
         # Build TOC from h2 sections
@@ -510,6 +526,40 @@ def generate_kit(
     results["zip_path"] = str(zip_path)
 
     print(f"[kit] Done. {len(pdf_paths)} PDFs, 1 ZIP → {product_dir}")
+
+    # Write generation report
+    report = {
+        "generated_at":        datetime.now(timezone.utc).isoformat(),
+        "llm_used":            results["llm_used"],
+        "fallback_used":       len(results["fallback_docs"]) > 0,
+        "documents_generated": results["llm_docs"] + results["fallback_docs"],
+        "llm_documents":       results["llm_docs"],
+        "fallback_documents":  results["fallback_docs"],
+        "failed_documents":    [e.split()[1] for e in results["errors"] if e.startswith("Doc ")],
+        "last_error_summary":  results["errors"][-1] if results["errors"] else None,
+        "individual_pdf_count": len(pdf_paths),
+        "master_pdf_exists":   master_path.exists(),
+        "pdf_count":           len(results["pdfs"]),
+        "zip_path":            results["zip_path"],
+        "niche":               niche,
+        "kit_name":            kit_name,
+    }
+    try:
+        report_path = product_dir / "kit_generation_report.json"
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        results["report_path"] = str(report_path)
+        logger.info("[kit] Report written → %s", report_path)
+    except Exception as e:
+        logger.warning("[kit] Could not write report: %s", e)
+
+    if not results["llm_used"]:
+        logger.warning(
+            "[kit] FALLBACK ONLY — no LLM content generated. "
+            "Check API keys, budget, kill-switch, and adapter wiring. "
+            "Fallback docs: %s. Errors: %s",
+            results["fallback_docs"], results["errors"] or "no explicit errors (llm_call_fn was None)"
+        )
+
     return results
 
 
@@ -1106,4 +1156,3 @@ _FALLBACK_BY_DOC: dict = {
         },
     ],
 }
-

@@ -39,6 +39,14 @@
 }
 .flash-success { background:#f0fdf4; border:1px solid #bbf7d0; color:#15803d; padding:12px 18px; border-radius:6px; margin-bottom:18px; font-size:0.90rem; }
 .flash-error   { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:12px 18px; border-radius:6px; margin-bottom:18px; font-size:0.90rem; }
+.flash-warning { background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:12px 18px; border-radius:6px; margin-bottom:18px; font-size:0.90rem; }
+.report-panel  { background:#f8f8f6; border:1px solid #e2e2db; border-radius:8px; padding:16px 20px; margin-bottom:20px; font-size:0.88rem; }
+.report-panel h3 { font-size:0.88rem; font-weight:700; color:#1a2744; margin:0 0 10px 0; }
+.report-row { display:flex; gap:8px; margin:4px 0; }
+.report-label { color:#6b7280; width:160px; flex-shrink:0; }
+.report-value { color:#111; font-weight:500; }
+.badge-llm     { background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:4px; font-size:0.80rem; }
+.badge-fallback{ background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:4px; font-size:0.80rem; }
 .cover-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; margin-top:10px; }
 .cover-thumb { border:1px solid #e2e2db; border-radius:6px; overflow:hidden; text-align:center; }
 .cover-thumb img { width:100%; height:auto; display:block; }
@@ -47,8 +55,27 @@
 
 {% if flash == "success" %}
 <div class="flash-success">✓ {{ msg }}</div>
+{% elif flash == "warning" %}
+<div class="flash-warning">⚠ {{ msg }}</div>
 {% elif flash == "error" %}
 <div class="flash-error">✗ {{ msg }}</div>
+{% endif %}
+
+{% if report %}
+<div class="report-panel">
+  <h3>Last Generation Report</h3>
+  <div class="report-row"><span class="report-label">Generated at</span><span class="report-value">{{ report.generated_at }}</span></div>
+  <div class="report-row"><span class="report-label">LLM content</span><span class="report-value">
+    {% if report.llm_used %}<span class="badge-llm">✓ LLM ({{ report.llm_documents | length }} docs)</span>{% else %}<span class="badge-fallback">✗ Fallback only</span>{% endif %}
+  </span></div>
+  {% if report.fallback_documents %}
+  <div class="report-row"><span class="report-label">Fallback docs</span><span class="report-value">{{ report.fallback_documents | join(", ") }}</span></div>
+  {% endif %}
+  {% if report.last_error_summary %}
+  <div class="report-row"><span class="report-label">Last error</span><span class="report-value" style="color:#b91c1c;word-break:break-all;">{{ report.last_error_summary }}</span></div>
+  {% endif %}
+  <div class="report-row"><span class="report-label">PDFs</span><span class="report-value">{{ report.pdf_count }}</span></div>
+</div>
 {% endif %}
 
 <div class="kit-header">

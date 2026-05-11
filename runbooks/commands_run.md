@@ -139,6 +139,78 @@ python3 -m json.tool products/product_43/manifest.json
 python3 -m json.tool products/product_43/visual/visual_theme_intelligence.json
 ```
 
+## Sprint 2.1
+
+```bash
+cd /home/jb/dev/hydra
+git status --short
+git log --oneline -6
+./scripts/preflight_check.sh
+bash scripts/verify_sprint20.sh
+python3 -m py_compile app/main.py app/db.py app/llm.py
+chmod +x scripts/verify_sprint21.sh
+bash scripts/verify_sprint21.sh
+docker compose up -d --build
+./scripts/preflight_check.sh
+LIVE=1 bash scripts/verify_sprint21.sh
+bash scripts/verify_sprint20.sh
+LIVE=1 bash scripts/verify_sprint20.sh
+find products/product_43/quality -maxdepth 1 -type f | sort
+python3 -m json.tool products/product_43/quality/readiness_report.json
+```
+
+## Sprint 2.2
+
+```bash
+cd /home/jb/dev/hydra
+git status
+git log --oneline -10
+ls app
+ls app/templates
+ls scripts
+python3 -m py_compile app/main.py app/db.py app/llm.py app/kit_covers.py app/kit_generator.py app/kit_routes.py
+bash scripts/verify_sprint22.sh
+BUILD=1 bash scripts/verify_sprint22.sh
+python3 -m venv /tmp/hydra_sprint22_venv
+/tmp/hydra_sprint22_venv/bin/pip install -r app/requirements.txt
+PYTHONPATH=app /tmp/hydra_sprint22_venv/bin/python - <<'PY'
+import main
+routes = sorted(getattr(route, "path", "") for route in main.app.routes)
+print([path for path in routes if path.startswith("/kits/")])
+PY
+/tmp/hydra_sprint22_venv/bin/python scripts/build_product43_kit.py --out /tmp/hydra_sprint22_full_build
+find /tmp/hydra_sprint22_full_build/product_43 -maxdepth 2 -type f | sort
+./scripts/preflight_check.sh || true
+LIVE=1 bash scripts/verify_sprint22.sh || true
+```
+
+## Sprint 2.3
+
+```bash
+cd /home/jb/dev/hydra
+bash scripts/verify_sprint23.sh
+LIVE=1 bash scripts/verify_sprint22.sh
+bash scripts/verify_sprint23_llm_persistence.sh
+docker compose up -d --build hydra-console
+curl -s -i -u admin:change-me -X POST http://localhost:8000/kits/43/generate \
+  -d 'kit_name=Real Estate AI Mastery Kit' \
+  -d 'kit_tagline=The complete AI implementation system for modern agents' \
+  -d 'niche=Real Estate Agents' \
+  -d 'niche_context=Professional real estate agents seeking AI implementation guidance' \
+  -d 'kit_edition=2026 Edition' \
+  -d 'theme=real_estate'
+bash scripts/verify_sprint23.sh
+LIVE=1 bash scripts/verify_sprint22.sh
+bash scripts/verify_sprint23_llm_persistence.sh
+grep -R -F 'CONTENT PENDING' products/product_43 || true
+grep -R -F 'LLM generation was not available' products/product_43 || true
+ls products/product_43/*.html | wc -l
+ls products/product_43/pdf/*.pdf | wc -l
+ls -lah products/product_43/*.zip
+docker compose exec -T postgres psql -U hydra -d hydra -Atc 'select purpose, count(1) from llm_calls group by purpose order by purpose;'
+python3 -m json.tool products/product_43/kit_generation_report.json
+```
+
 
 ## Sprint 1.3
 

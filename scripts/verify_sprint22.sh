@@ -90,8 +90,8 @@ file_contains "app/main.py" "app.include_router(kit_router)" "Router included in
 header "6. build_product43_kit.py — standalone builder"
 file_contains "scripts/build_product43_kit.py" "PRODUCT_ID  = 43" "Targets product 43"
 file_contains "scripts/build_product43_kit.py" "Real Estate AI Mastery Kit" "Has kit name"
-file_contains "scripts/build_product43_kit.py" "HYDRA kit LLM adapter not enabled" \
-  "Uses deterministic fallback without direct provider calls"
+file_contains "scripts/build_product43_kit.py" "make_kit_llm_caller" \
+  "Uses guarded kit LLM adapter without direct provider calls"
 file_contains "scripts/build_product43_kit.py" "covers-only" "Has covers-only flag"
 file_contains "scripts/build_product43_kit.py" "no-pdf" "Has no-pdf flag"
 file_contains "scripts/build_product43_kit.py" "build_kit_covers" "Calls cover builder"

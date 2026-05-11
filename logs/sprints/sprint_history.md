@@ -72,6 +72,62 @@ Entry format:
 - Next:
   - Follow `runbooks/ROADMAP.md` immediate next sprint recommendation unless operator overrides.
 
+## 2026-05-10 - Sprint 2.2 Integration
+
+- Executor: Codex
+- Scope: Integrated Claude's professional business kit generation files into the WSL HYDRA app.
+- Files changed:
+  - `app/main.py`
+  - `app/kit_routes.py`
+  - `app/kit_generator.py`
+  - `app/Dockerfile`
+  - `app/requirements.txt`
+  - `app/templates/base.html`
+  - `app/templates/product_edit.html`
+  - `scripts/build_product43_kit.py`
+  - `scripts/verify_sprint22.sh`
+  - `runbooks/sprint_2.2_handoff.md`
+  - `runbooks/ROADMAP.md`
+  - `runbooks/commands_run.md`
+  - `runbooks/known_issues.md`
+  - `runbooks/verification_results.md`
+- Verification:
+  - Static Sprint 2.2 verifier: PASS, 62/62.
+  - Build verifier: PASS, 66/66.
+  - Temp venv app import: PASS, 5 kit routes registered.
+  - Full temp kit build: PASS, 8 HTML, 9 PDFs, 9 SVG covers, 1 ZIP.
+  - Live Docker verification: BLOCKED, Docker CLI unavailable in this environment and old app served `/kits/43` as 404.
+- Next:
+  - Rebuild on a Docker-enabled host, run live verifier, then add a guarded kit LLM adapter if richer document content is desired.
+
+## 2026-05-11 - Sprint 2.3 Follow-up
+
+- Executor: Codex
+- Scope: Fixed Product 43 kit LLM call persistence and completed Sprint 2.3 verification.
+- Root cause:
+  - Budget mismatch originally blocked kit document LLM calls.
+  - After budget was fixed, `llm_calls` still missed `kit_doc_sections` because the LLM client only flushed rows and the kit route passed a session that was not committed after document calls.
+- Files changed:
+  - `app/kit_llm_adapter.py`
+  - `app/kit_routes.py`
+  - `app/kit_generator.py`
+  - `.env.example`
+  - `scripts/verify_sprint22.sh`
+  - `scripts/verify_sprint23_llm_persistence.sh`
+  - `runbooks/sprint_2.3_handoff.md`
+  - `runbooks/commands_run.md`
+  - `runbooks/known_issues.md`
+  - `runbooks/verification_results.md`
+  - `logs/sprints/sprint_history.md`
+- Verification:
+  - `bash scripts/verify_sprint23.sh` — PASS, 42/42.
+  - `LIVE=1 bash scripts/verify_sprint22.sh` — PASS, 64/64.
+  - `bash scripts/verify_sprint23_llm_persistence.sh` — PASS, 7/7.
+  - Product 43 regenerated with `llm_used=true`, `fallback_used=false`.
+  - `llm_calls` contains `kit_doc_sections|8`.
+- Next:
+  - Manual commercial review and first Gumroad/Fiverr listing workflow for Product 43.
+
 ## 2026-05-10T20:59:49Z - Sprint 1.7 Closeout (Marketplace Intelligence v1)
 
 - Commit: `uncommitted at closeout`
@@ -179,6 +235,33 @@ Entry format:
   - See `runbooks/known_issues.md`.
 - Next:
   - Add deterministic package quality scoring and upload-readiness checklist before any image generation or marketplace automation.
+
+## 2026-05-10T22:41:49Z - Sprint 2.1 Closeout (Package Quality Scoring + Upload Readiness)
+
+- Commit: `uncommitted at closeout`
+- Branch: `main`
+- Executor: Codex
+- Source of truth: `/home/jb/dev/hydra`
+- Summary:
+  - Added deterministic quality-check route.
+  - Added readiness score, ready/not-ready status, blockers, platform readiness, policy/IP scan, and buyer-value clarity.
+  - Generated six quality report files under `products/product_<id>/quality/`.
+  - Updated manifest with `quality_report`, `readiness_status`, and `readiness_score`.
+  - Added Product Edit UI readiness panel and button.
+- Verification:
+  - `bash scripts/verify_sprint21.sh` — PASS, 13/13.
+  - `LIVE=1 bash scripts/verify_sprint21.sh` — PASS, 25/25.
+  - `bash scripts/verify_sprint20.sh` — PASS.
+  - `LIVE=1 bash scripts/verify_sprint20.sh` — PASS.
+- Manual smoke:
+  - Product 43 readiness score: 100.
+  - Product 43 readiness status: ready.
+  - Product 43 blockers: none.
+  - Quality files and UI readiness section verified.
+- Known issues:
+  - See `runbooks/known_issues.md`.
+- Next:
+  - Add deterministic content/package QA gates for placeholders, spelling, license consistency, and upload checklist signoff.
 
 ## 2026-05-09T03:55:00Z - Sprint 1.4 Controlled LLM Execution Layer
 
