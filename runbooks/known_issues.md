@@ -11,6 +11,10 @@ Severities: `low` / `medium` / `high`.
 
 ---
 
+- 2026-05-11 [sprint 2.5] **low** — Palette variant assets are SVG-only and still need manual PNG/JPG export for marketplace upload. Mitigation: `marketplace_visuals/variants/export_notes.md` documents export targets and suggested commands.
+- 2026-05-11 [sprint 2.5] **low** — Visual variant selection is still a human decision; no automated conversion-score prediction. Mitigation: `variants/index.html` makes side-by-side operator review fast.
+- 2026-05-11 [sprint 2.4] **low** — Marketplace visual assets are SVG source files, not exported PNG/JPG uploads. Mitigation: acceptable for deterministic Sprint 2.4; export manually for first listing or add a lightweight export step later.
+- 2026-05-11 [sprint 2.4] **low** — Visual upgrade improves perceived value but still requires operator review before publishing at $97. Mitigation: `products/product_43/quality/visual_commercial_review.md` records first-listing readiness and remaining gaps.
 - 2026-05-11 [sprint 2.3] **low** — Route-generated kit files are owned by `root` because `hydra-console` still runs as root. Mitigation: acceptable for local MVP; fix with non-root container user before public/VPS deployment.
 - 2026-05-11 [sprint 2.3] **low** — Product 43 has two ZIP artifacts (`Real_Estate_AI_Mastery_Kit.zip` and `Real_Estate_AI_Mastery_Kit_Kit.zip`) from standalone and route-based builds. Mitigation: use the newest route-generated ZIP for the first listing, then clean naming in the next packaging polish sprint.
 - 2026-05-10 [sprint 2.2] **medium** — ~~Current execution environment has no Docker CLI, so the app could not be rebuilt/restarted for live Sprint 2.2 route verification. Port 8000 is served by an older app that returns 404 for `/kits/43`. Mitigation: integration verified by static checks and temp venv app import; rerun `docker compose up -d --build` and `LIVE=1 bash scripts/verify_sprint22.sh` on a Docker-enabled host.~~ (resolved sprint 2.3: Docker rebuild succeeded and `LIVE=1 bash scripts/verify_sprint22.sh` passes.)

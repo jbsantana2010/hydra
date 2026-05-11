@@ -211,6 +211,53 @@ docker compose exec -T postgres psql -U hydra -d hydra -Atc 'select purpose, cou
 python3 -m json.tool products/product_43/kit_generation_report.json
 ```
 
+## Sprint 2.4
+
+```bash
+cd /home/jb/dev/hydra
+python3 -m py_compile app/kit_covers.py app/kit_generator.py app/kit_routes.py
+docker compose up -d --build hydra-console
+curl -s -i -u admin:change-me -X POST http://localhost:8000/kits/43/generate \
+  -d 'kit_name=Real Estate AI Mastery Kit' \
+  -d 'kit_tagline=The complete AI implementation system for modern agents' \
+  -d 'niche=Real Estate Agents' \
+  -d 'niche_context=Professional real estate agents seeking AI implementation guidance' \
+  -d 'kit_edition=2026 Edition' \
+  -d 'theme=real_estate'
+chmod +x scripts/verify_sprint24.sh
+bash scripts/verify_sprint24.sh
+LIVE=1 bash scripts/verify_sprint24.sh
+bash scripts/verify_sprint23.sh
+find products/product_43/marketplace_visuals -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+ls -lh products/product_43/covers/cover_MASTER.svg \
+  products/product_43/marketplace_visuals/fiverr_gig_image_1280x769.svg \
+  products/product_43/02_Listing_Description_System.pdf \
+  products/product_43/MASTER_Complete_Kit.pdf
+```
+
+## Sprint 2.5
+
+```bash
+cd /home/jb/dev/hydra
+python3 -m py_compile app/kit_covers.py
+docker compose up -d --build hydra-console
+curl -s -i -u admin:change-me -X POST http://localhost:8000/kits/43/generate \
+  -d 'kit_name=Real Estate AI Mastery Kit' \
+  -d 'kit_tagline=The complete AI implementation system for modern agents' \
+  -d 'niche=Real Estate Agents' \
+  -d 'niche_context=Professional real estate agents seeking AI implementation guidance' \
+  -d 'kit_edition=2026 Edition' \
+  -d 'theme=navy_gold'
+chmod +x scripts/verify_sprint25.sh
+bash scripts/verify_sprint25.sh
+LIVE=1 bash scripts/verify_sprint25.sh
+bash scripts/verify_sprint24.sh
+bash scripts/verify_sprint23.sh
+find products/product_43/marketplace_visuals/variants -maxdepth 2 -type f | sort
+ls -lh products/product_43/marketplace_visuals/variants/index.html \
+  products/product_43/marketplace_visuals/variants/export_notes.md
+```
+
 
 ## Sprint 1.3
 

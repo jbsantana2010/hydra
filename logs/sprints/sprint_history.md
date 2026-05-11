@@ -128,6 +128,63 @@ Entry format:
 - Next:
   - Manual commercial review and first Gumroad/Fiverr listing workflow for Product 43.
 
+## 2026-05-11 - Sprint 2.4 Commercial Visual Upgrade
+
+- Executor: Codex
+- Scope: Deterministic visual upgrade for Product 43 covers, document styling, and marketplace visuals.
+- Files changed:
+  - `app/kit_covers.py`
+  - `app/templates/kit_document.html`
+  - `scripts/verify_sprint24.sh`
+  - `products/product_43/quality/visual_commercial_review.md`
+  - Product 43 generated covers, PDFs, ZIP, and marketplace visuals
+  - `runbooks/sprint_2.4_handoff.md`
+  - `runbooks/commands_run.md`
+  - `runbooks/known_issues.md`
+  - `runbooks/verification_results.md`
+  - `logs/sprints/sprint_history.md`
+- Verification:
+  - `bash scripts/verify_sprint24.sh` — PASS, 30/30.
+  - `LIVE=1 bash scripts/verify_sprint24.sh` — PASS, 31/31.
+  - `bash scripts/verify_sprint23.sh` — PASS, 42/42.
+- Product 43 status:
+  - Master cover, Gumroad cover, Fiverr 1280x769 image, mockup, value stack, and included-docs visuals generated.
+  - `02_Listing_Description_System.pdf` and `MASTER_Complete_Kit.pdf` regenerated with upgraded template.
+  - Visual review states Product 43 is good enough for first Gumroad/Fiverr listing.
+- Next:
+  - Export SVG visuals to PNG/JPG, create first Gumroad listing manually, paste URL into HYDRA, and record launch telemetry.
+
+## 2026-05-11 - Sprint 2.5 Marketplace Visual Variants
+
+- Executor: Codex
+- Scope: Refined deterministic marketplace SVG layouts and generated five palette variants for Product 43.
+- Files changed:
+  - `app/kit_covers.py`
+  - `scripts/verify_sprint25.sh`
+  - `products/product_43/quality/visual_commercial_review.md`
+  - `products/product_43/marketplace_visuals/variants/*`
+  - `runbooks/sprint_2.5_handoff.md`
+  - `runbooks/ROADMAP.md`
+  - `runbooks/commands_run.md`
+  - `runbooks/known_issues.md`
+  - `runbooks/verification_results.md`
+  - `logs/sprints/sprint_history.md`
+- Verification:
+  - `bash scripts/verify_sprint25.sh` — PASS, 70/70.
+  - `LIVE=1 bash scripts/verify_sprint25.sh` — PASS, 71/71.
+  - `bash scripts/verify_sprint24.sh` — PASS, 30/30.
+  - `bash scripts/verify_sprint23.sh` — PASS, 42/42.
+- Variants:
+  - Navy Gold
+  - Charcoal Emerald
+  - White Navy Gold
+  - Deep Teal Copper
+  - Black Platinum Blue
+- Recommended theme:
+  - Navy Gold for first $97 listing test.
+- Next:
+  - Open `products/product_43/marketplace_visuals/variants/index.html`, choose final variant, export PNG/JPG, and create the first Gumroad listing manually.
+
 ## 2026-05-10T20:59:49Z - Sprint 1.7 Closeout (Marketplace Intelligence v1)
 
 - Commit: `uncommitted at closeout`

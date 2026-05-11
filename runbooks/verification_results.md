@@ -199,3 +199,32 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | `llm_calls` persistence | PASS — `kit_doc_sections|8` |
 | Placeholder scan | PASS — no `CONTENT PENDING` or `LLM generation was not available` |
 | Product 43 kit assets | PASS — 8 HTML, 8 individual kit PDFs, master PDF, delivery ZIP |
+
+---
+
+## Sprint 2.4 — 2026-05-11
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint24.sh` | PASS — 30/30 |
+| `LIVE=1 bash scripts/verify_sprint24.sh` | PASS — 31/31 |
+| `bash scripts/verify_sprint23.sh` | PASS — 42/42 |
+| Product 43 regenerated through `/kits/43/generate` | PASS — 303 success redirect with LLM content |
+| Upgraded covers | PASS — master + 8 document covers |
+| Marketplace visuals | PASS — Gumroad, Fiverr 1280x769, mockup, value stack, 8-docs included, Payhip/Sellfy |
+| Visual commercial review | PASS — states good enough for first Gumroad/Fiverr listing |
+
+---
+
+## Sprint 2.5 — 2026-05-11
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint25.sh` | PASS — 70/70 |
+| `LIVE=1 bash scripts/verify_sprint25.sh` | PASS — 71/71 |
+| `bash scripts/verify_sprint24.sh` | PASS — 30/30 |
+| `bash scripts/verify_sprint23.sh` | PASS — 42/42 |
+| Palette variants | PASS — five complete variant folders |
+| Variant index | PASS — `products/product_43/marketplace_visuals/variants/index.html` |
+| Export notes | PASS — recommends Navy Gold and gives manual export commands |
+| Fiverr dimensions | PASS — all variant Fiverr SVGs are 1280x769 with matching viewBox |

@@ -21,7 +21,20 @@
 
 ## Current Operator Override
 
-The operator advanced HYDRA through product packaging and visual commerce work before the older collector/clustering roadmap items. As of Sprint 2.2, HYDRA includes local package generation, preview/visual specs, readiness scoring, and a professional business kit generation layer for Product 43. Older roadmap entries that mention a different Sprint 2.2 remain as historical planning context, not the active completed Sprint 2.2 scope.
+The operator advanced HYDRA through product packaging and visual commerce work before the older collector/clustering roadmap items. As of Sprint 2.5, HYDRA includes local package generation, preview/visual specs, readiness scoring, a professional business kit generation layer for Product 43, marketplace visual assets, and five deterministic palette variants for first-listing comparison. Older roadmap entries that mention a different Sprint 2.2 remain as historical planning context, not the active completed Sprint 2.2 scope.
+
+### Completed Visual Commerce Track
+
+- Sprint 1.8: local product asset generation and packaging.
+- Sprint 1.9: preview assets, PDF export, and presentation assets.
+- Sprint 2.0: visual theme intelligence and marketplace visual specs.
+- Sprint 2.1: package quality scoring and upload readiness.
+- Sprint 2.2: professional business kit generation.
+- Sprint 2.3: guarded kit LLM adapter and persisted kit-document LLM calls.
+- Sprint 2.4: commercial visual asset upgrade.
+- Sprint 2.5: marketplace visual refinement and palette variants.
+
+Immediate revenue path: choose a Product 43 visual variant, export marketplace SVG assets to PNG/JPG, create the Gumroad listing manually, store the URL in HYDRA, and track launch results.
 
 
 ---
