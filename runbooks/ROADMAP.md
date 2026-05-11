@@ -3,7 +3,7 @@
 **Authoritative execution plan from current state to first real autonomous revenue loop.**
 
 - **Owner:** Operator (jb)
-- **Last updated:** 2026-05-08, end of Sprint 1.2
+- **Last updated:** 2026-05-10, Sprint 2.2 integration
 - **Boundary law:** Zone A (Ruflo/Claude/Codex) generates artifacts only. Zone B (FastAPI + Postgres + Redis) owns approvals, state, money, URLs, budgets, and publishing authority.
 - **Resilience target:** Any agent (Codex, Claude, ChatGPT, future contributor) must be able to resume HYDRA from the last sprint handoff without re-deriving context.
 
@@ -18,6 +18,10 @@
 7. [First real revenue plan](#part-7--first-real-revenue-plan)
 8. [Long-term architecture guardrails](#part-8--long-term-architecture-guardrails)
 9. [Execution priorities](#part-9--execution-priorities)
+
+## Current Operator Override
+
+The operator advanced HYDRA through product packaging and visual commerce work before the older collector/clustering roadmap items. As of Sprint 2.2, HYDRA includes local package generation, preview/visual specs, readiness scoring, and a professional business kit generation layer for Product 43. Older roadmap entries that mention a different Sprint 2.2 remain as historical planning context, not the active completed Sprint 2.2 scope.
 
 
 ---
@@ -161,6 +165,26 @@ Already shipped: file tracking, artifact export, Gumroad URL warnings, launch da
 - **Dependencies:** Sprint 1.9 package builder.
 - **Risks:** Deterministic theme selection can be too coarse for unusual niches. Mitigation: outputs are editable specs and require human review before visual production.
 - **Acceptance criteria:** `bash scripts/verify_sprint20.sh` and `LIVE=1 bash scripts/verify_sprint20.sh` pass; product 43 package contains a complete `visual/` folder.
+- **Executor:** Codex-safe.
+
+---
+
+### Sprint 2.1 — Package Quality Scoring + Upload Readiness
+
+- **Objective:** Tell the operator whether a generated product package is ready to sell.
+- **Status:** Complete 2026-05-10.
+- **Features:**
+  - `POST /products/{id}/quality-check`.
+  - Deterministic readiness score out of 100.
+  - Ready/not-ready status with hard blockers.
+  - Quality reports under `products/product_<id>/quality/`.
+  - Platform readiness for Gumroad, Fiverr, Payhip, Sellfy, and Pinterest.
+  - Deterministic policy/IP keyword scan.
+  - Manifest updated with `quality_report`, `readiness_status`, and `readiness_score`.
+  - Product edit page shows score, status, blockers, platform summary, and report path.
+- **Dependencies:** Sprint 2.0 package/visual assets.
+- **Risks:** File-presence scoring can overstate true commercial quality. Mitigation: report states human review is still required; future sprint can add deeper deterministic content checks.
+- **Acceptance criteria:** `bash scripts/verify_sprint21.sh` and `LIVE=1 bash scripts/verify_sprint21.sh` pass; product 43 readiness report exists and renders in UI.
 - **Executor:** Codex-safe.
 
 ---
@@ -1079,3 +1103,100 @@ loop with patterns grounded in observed buyer behavior, not forum discussion.
 - Background scheduling.
 
 #### Files expected to change
+
+
+---
+
+## Sprint 2.3 — Guarded LLM Adapter + Product 43 Content + Sales Assets
+**Date:** 2026-05-11
+**Status:** COMPLETE (42/42 verify checks pass)
+
+### What was built
+
+**Guarded LLM adapter (`app/kit_llm_adapter.py`)**
+- `make_kit_llm_caller(db)` returns a closure bound to a DB session
+- Calls `call_llm_json(db, purpose="kit_doc_sections", ...)` — all spend through guarded layer
+- Returns `list[dict]` of section objects directly; `generate_kit()` updated to handle list return
+- Raises `LlmBlocked`/`LlmFailed` on policy failure so `generate_kit()` falls back cleanly
+- Zero direct Anthropic/OpenAI SDK calls anywhere in kit pipeline
+
+**`app/kit_generator.py` updates**
+- `shared_tail` prompt updated: instructs LLM to return `{"sections": [...]}` dict, not bare array
+- `generate_kit()` LLM call handler updated to accept list, dict, or string from caller (adapter returns list)
+- `_fallback_sections()` replaced with `_FALLBACK_BY_DOC` — professional, real-estate-specific content for all 8 documents. No lorem ipsum.
+
+**`app/kit_routes.py`**
+- `_get_llm_caller()` now accepts `db` parameter and calls `make_kit_llm_caller(db)`
+- Route passes session to `_get_llm_caller(session)` at call site
+
+**`scripts/build_product43_kit.py`**
+- `get_llm_caller()` opens `SessionLocal()` and returns `make_kit_llm_caller(db)`
+- No direct SDK imports — all LLM access through guarded layer
+
+**`app/llm.py`**
+- Added `kit_doc_sections` purpose with 4000-token completion budget
+
+**`app/templates/kit_document.html`**
+- Fixed `section.items` → `section['items']` (bracket notation forces dict key lookup, avoids Python dict.items() method collision in Jinja2)
+
+**Product 43 — full build**
+- All 8 documents generated (HTML + PDF via WeasyPrint)
+- Master combined PDF assembled (373K)
+- Delivery ZIP built (626K)
+- 9 SVG covers regenerated (ownership fixed from root to jb)
+
+**Sales assets (`products/product_43/sales/`)**
+- `gumroad_listing.md` — title, tagline, full description, tags, CTA
+- `fiverr_gig.md` — 3 packages ($97/$147/$247), FAQ, buyer intake form
+- `pricing_strategy.md` — $97/$197 rationale, what NOT to do, Fiverr margin table
+- `plr_license.md` — can/cannot list, use cases, file delivery terms
+- `buyer_intake.md` — 8-question custom order form, delivery timeline, revision policy
+
+**`products/product_43/manifest.json`** — fully updated (title, type, sprint, all file refs)
+
+**`products/product_43/quality/professional_kit_review.md`** — document-by-document review, PDF render assessment, sales asset review, commercial readiness score (7.6/10, approved for listing after LLM upgrade)
+
+**`scripts/verify_sprint23.sh`** — 42-check verification script, 0 FAIL
+
+### Bugs fixed en route
+- `section.items` Jinja2 dict-method collision (template fix)
+- `set -euo pipefail` + `grep|wc -l` killing verify script on no-match (pipefail removed, pipes guarded)
+- `((PASS++))` arithmetic returning 0 with `set -e` (replaced with `PASS=$((PASS+1))`)
+- SVG cover files owned by root (fixed with `wsl -u root chown`)
+- Unescaped `"` in fallback content string (`36" gas range` → `36-inch gas range`)
+
+### Current Product 43 state
+- Content: professional fallback (real-estate-specific, no lorem ipsum)
+- LLM upgrade path: hit `POST /kits/43/generate` via web UI with API key configured
+- Ready to list: YES after LLM upgrade + Gumroad setup (~1-2 hrs operator time)
+- Cover PNG export needed for Gumroad gallery: `rsvg-convert -w 1200 covers/cover_MASTER.svg -o cover_MASTER.png`
+
+### Sprint 2.4 — Recommended next
+1. LLM content upgrade: trigger `/kits/43/generate` via web UI with API key
+2. Gumroad product listing at $97 (use `sales/gumroad_listing.md` as source)
+3. Cover PNG export for gallery images
+4. Gumroad PLR upsell product at $197
+5. First sale — first revenue test
+6. Post-sale: Fiverr gig creation (use `sales/fiverr_gig.md`)
+
+### What NOT to add in 2.4
+- Webhook auto-fulfillment (Sprint 3.x)
+- Subscription tier (wait for 50+ sales)
+- Payhip integration (wait for proven product)
+- Image generation APIs
+- Browser automation or publishing automation
+- Celery/workers
+
+### Files changed
+- `app/llm.py` (kit_doc_sections budget)
+- `app/kit_llm_adapter.py` (NEW)
+- `app/kit_generator.py` (prompts, handler, fallback)
+- `app/kit_routes.py` (_get_llm_caller wired)
+- `app/templates/kit_document.html` (items fix)
+- `scripts/build_product43_kit.py` (guarded layer)
+- `scripts/verify_sprint23.sh` (NEW)
+- `products/product_43/manifest.json` (rebuilt)
+- `products/product_43/` — 8 HTML + 9 PDF + ZIP + covers
+- `products/product_43/sales/` — 5 files (NEW)
+- `products/product_43/quality/professional_kit_review.md` (NEW)
+- `runbooks/ROADMAP.md` (this entry)

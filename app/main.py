@@ -41,6 +41,7 @@ from db import (
     set_flag_value,
 )
 from llm import LlmBlocked, LlmFailed, call_llm_json, get_today_llm_spend
+from kit_routes import kit_router
 from ruflo_bridge import build_ruflo_listing_prompt, build_ruflo_product_prompt
 from signal_engine import calculate_score, mock_candidates
 
@@ -48,6 +49,7 @@ EXPORT_ROOT = Path(os.getenv("HYDRA_EXPORT_ROOT", "exports"))
 PRODUCT_ROOT = Path(os.getenv("HYDRA_PRODUCT_ROOT", "products"))
 
 app = FastAPI(title="HYDRA Console", version="0.1.0")
+app.include_router(kit_router)
 templates = Jinja2Templates(directory="templates")
 
 
@@ -230,6 +232,7 @@ def edit_product(
             .where(ProductFile.product_id == product_id)
             .order_by(desc(ProductFile.created_at))
         ).all()
+        readiness_report = _load_readiness_report(product_id)
         url_check = check_gumroad_url(product)
         generation_steps = ("outline", "product_content", "listing_copy", "qa_review", "distribution_post")
         generation_status = {
@@ -274,6 +277,7 @@ def edit_product(
                 "listings": listings,
                 "recent_llm_calls": recent_llm_calls,
                 "flash_banner": flash_banner,
+                "readiness_report": readiness_report,
             },
         )
 
@@ -1254,6 +1258,24 @@ def package_product(product_id: int):
         "success",
         "package",
         msg=f"✓ Product package built: {zip_path}",
+    )
+
+
+@app.post("/products/{product_id}/quality-check")
+def quality_check_product(product_id: int):
+    """Run deterministic package quality scoring and upload-readiness checks."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        product_data = _model_to_dict(product)
+
+    report = build_readiness_report(product_data)
+    return _generation_redirect(
+        product_id,
+        "success",
+        "quality",
+        msg=f"✓ Readiness check complete: {report['readiness_status']} ({report['readiness_score']}/100)",
     )
 
 
@@ -2277,6 +2299,380 @@ def _pdf_escape(text: str) -> str:
         .replace("(", "\\(")
         .replace(")", "\\)")
     )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2.1 — Package quality scoring + upload readiness
+# ---------------------------------------------------------------------------
+
+QUALITY_FILES = (
+    "readiness_report.json",
+    "readiness_report.md",
+    "platform_readiness.md",
+    "missing_assets.md",
+    "policy_risk_check.md",
+    "improvement_plan.md",
+)
+
+POLICY_HIGH_RISK_KEYWORDS = (
+    "Disney",
+    "Marvel",
+    "Nintendo",
+    "pokémon",
+    "Pokemon",
+    "Star Wars",
+    "Taylor Swift",
+    "Barbie",
+    "NFL",
+    "NBA",
+    "official",
+    "licensed",
+)
+POLICY_MEDIUM_RISK_KEYWORDS = (
+    "inspired by",
+    "celebrity",
+    "swiftie",
+    "super bowl",
+    "mickey",
+    "zelda",
+    "mario",
+    "avengers",
+)
+
+
+def build_readiness_report(product: dict) -> dict:
+    product_id = int(product["id"])
+    package_dir = PRODUCT_ROOT / f"product_{product_id}"
+    quality_dir = package_dir / "quality"
+    quality_dir.mkdir(parents=True, exist_ok=True)
+
+    paths = _package_paths(product_id)
+    checks = _score_package_paths(paths)
+    policy = _policy_risk_scan(package_dir)
+    checks["policy_risk_clean"]["passed"] = policy["risk_level"] == "low"
+    platform_readiness = _platform_readiness(paths)
+    buyer_value = _buyer_value_clarity(package_dir)
+
+    hard_blockers = _hard_blockers(paths)
+    if policy["risk_level"] == "high":
+        hard_blockers.append("High policy/IP risk keyword found")
+
+    score = sum(item["points"] for item in checks.values() if item["passed"])
+    readiness_status = "ready" if score >= 80 and not hard_blockers else "not ready"
+    top_blockers = hard_blockers + _missing_asset_messages(checks)
+
+    report_paths = {
+        "readiness_report_json": str(quality_dir / "readiness_report.json"),
+        "readiness_report_md": str(quality_dir / "readiness_report.md"),
+        "platform_readiness": str(quality_dir / "platform_readiness.md"),
+        "missing_assets": str(quality_dir / "missing_assets.md"),
+        "policy_risk_check": str(quality_dir / "policy_risk_check.md"),
+        "improvement_plan": str(quality_dir / "improvement_plan.md"),
+    }
+    report = {
+        "product_id": product_id,
+        "title": product.get("title"),
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "readiness_score": score,
+        "readiness_status": readiness_status,
+        "hard_blockers": hard_blockers,
+        "top_blockers": top_blockers[:8],
+        "score_breakdown": checks,
+        "policy_risk": policy,
+        "buyer_value_clarity": buyer_value,
+        "platform_readiness": platform_readiness,
+        "report_paths": report_paths,
+    }
+
+    (quality_dir / "readiness_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (quality_dir / "readiness_report.md").write_text(_readiness_report_markdown(report), encoding="utf-8")
+    (quality_dir / "platform_readiness.md").write_text(_platform_readiness_markdown(platform_readiness), encoding="utf-8")
+    (quality_dir / "missing_assets.md").write_text(_missing_assets_markdown(checks, hard_blockers), encoding="utf-8")
+    (quality_dir / "policy_risk_check.md").write_text(_policy_risk_markdown(policy), encoding="utf-8")
+    (quality_dir / "improvement_plan.md").write_text(_improvement_plan_markdown(report), encoding="utf-8")
+
+    _update_manifest_with_quality(product_id, package_dir, report)
+    _refresh_package_zip(product_id, package_dir)
+    return report
+
+
+def _load_readiness_report(product_id: int) -> dict | None:
+    path = PRODUCT_ROOT / f"product_{product_id}" / "quality" / "readiness_report.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _package_paths(product_id: int) -> dict[str, Path]:
+    package_dir = PRODUCT_ROOT / f"product_{product_id}"
+    return {
+        "package_dir": package_dir,
+        "zip": PRODUCT_ROOT / f"product_{product_id}.zip",
+        "readme": package_dir / "README.md",
+        "manifest": package_dir / "manifest.json",
+        "marketplace_checklist": package_dir / "marketplace_checklist.md",
+        "source": package_dir / "source",
+        "outline": package_dir / "source" / "outline.md",
+        "product_content": package_dir / "source" / "product_content.md",
+        "listing_copy": package_dir / "source" / "listing_copy.md",
+        "printable": package_dir / "printable",
+        "pdf": package_dir / "pdf" / "printable_pack.pdf",
+        "preview": package_dir / "preview",
+        "visual": package_dir / "visual",
+        "presentation": package_dir / "presentation",
+        "fiverr_brief": package_dir / "presentation" / "fiverr_gig_brief.md",
+        "mockup_spec": package_dir / "presentation" / "mockup_cover_spec.md",
+        "gallery_plan": package_dir / "visual" / "product_gallery_plan.md",
+        "visual_specs": package_dir / "visual" / "marketplace_visual_specs.md",
+        "cover_prompts": package_dir / "visual" / "cover_mockup_prompts.md",
+    }
+
+
+def _score_package_paths(paths: dict[str, Path]) -> dict[str, dict]:
+    source_ok = paths["outline"].exists() and paths["product_content"].exists() and paths["listing_copy"].exists()
+    printable_ok = paths["printable"].exists() and any(paths["printable"].glob("*.html"))
+    preview_ok = paths["preview"].exists() and (paths["preview"] / "cover_preview.html").exists()
+    visual_ok = paths["visual"].exists() and paths["visual_specs"].exists() and paths["gallery_plan"].exists()
+    required_ok = (
+        paths["readme"].exists()
+        and paths["manifest"].exists()
+        and paths["marketplace_checklist"].exists()
+        and paths["product_content"].exists()
+        and paths["listing_copy"].exists()
+    )
+    return {
+        "required_files_present": {"points": 25, "passed": required_ok},
+        "source_markdown_present": {"points": 10, "passed": source_ok},
+        "printable_files_present": {"points": 10, "passed": printable_ok},
+        "pdf_present": {"points": 10, "passed": paths["pdf"].exists()},
+        "listing_copy_present": {"points": 10, "passed": paths["listing_copy"].exists()},
+        "preview_assets_present": {"points": 10, "passed": preview_ok},
+        "visual_specs_present": {"points": 10, "passed": visual_ok},
+        "marketplace_checklist_present": {"points": 5, "passed": paths["marketplace_checklist"].exists()},
+        "policy_risk_clean": {"points": 5, "passed": True},
+        "package_zip_present": {"points": 5, "passed": paths["zip"].exists()},
+    }
+
+
+def _hard_blockers(paths: dict[str, Path]) -> list[str]:
+    blockers: list[str] = []
+    required = {
+        "no package ZIP": paths["zip"],
+        "missing listing_copy": paths["listing_copy"],
+        "missing product_content": paths["product_content"],
+        "no README": paths["readme"],
+        "no manifest": paths["manifest"],
+        "no marketplace checklist": paths["marketplace_checklist"],
+    }
+    for message, path in required.items():
+        if not path.exists():
+            blockers.append(message)
+    return blockers
+
+
+def _policy_risk_scan(package_dir: Path) -> dict:
+    text_parts: list[str] = []
+    for path in package_dir.rglob("*"):
+        if path.is_file() and path.suffix.lower() in (".md", ".json", ".html", ".txt"):
+            try:
+                text_parts.append(path.read_text(encoding="utf-8", errors="ignore"))
+            except OSError:
+                continue
+    text = "\n".join(text_parts).lower()
+    high = [kw for kw in POLICY_HIGH_RISK_KEYWORDS if kw.lower() in text]
+    medium = [kw for kw in POLICY_MEDIUM_RISK_KEYWORDS if kw.lower() in text]
+    if "inspired by" in text and any(kw in text for kw in POLICY_HIGH_RISK_KEYWORDS):
+        high.append("inspired by + known brand")
+    risk_level = "high" if high else "medium" if medium else "low"
+    return {
+        "risk_level": risk_level,
+        "high_risk_keywords": sorted(set(high)),
+        "medium_risk_keywords": sorted(set(medium)),
+        "notes": "Deterministic keyword scan only; human review required before publishing.",
+    }
+
+
+def _platform_readiness(paths: dict[str, Path]) -> dict[str, dict]:
+    rules = {
+        "Gumroad": {
+            "required": ["zip", "readme", "listing_copy", "mockup_spec"],
+            "fixes": ["Add ZIP, README, listing copy, and mockup/cover spec."],
+        },
+        "Fiverr": {
+            "required": ["fiverr_brief", "visual_specs", "package_dir"],
+            "fixes": ["Add Fiverr gig brief and visual prompt/spec documents."],
+        },
+        "Payhip": {
+            "required": ["zip", "listing_copy", "preview", "pdf"],
+            "fixes": ["Add ZIP, listing copy, preview assets, and PDF pack."],
+        },
+        "Sellfy": {
+            "required": ["zip", "listing_copy", "preview", "visual_specs"],
+            "fixes": ["Add ZIP, listing copy, preview assets, and visual specs."],
+        },
+        "Pinterest": {
+            "required": ["visual_specs", "gallery_plan", "cover_prompts"],
+            "fixes": ["Add visual specs, gallery plan, and cover/mockup prompts."],
+        },
+    }
+    result: dict[str, dict] = {}
+    for platform, rule in rules.items():
+        missing = [name for name in rule["required"] if not paths[name].exists()]
+        result[platform] = {
+            "status": "ready" if not missing else "not ready",
+            "missing": missing,
+            "recommended_fixes": [] if not missing else rule["fixes"],
+        }
+    return result
+
+
+def _buyer_value_clarity(package_dir: Path) -> dict:
+    targets = [
+        package_dir / "README.md",
+        package_dir / "marketplace_checklist.md",
+        package_dir / "presentation" / "perceived_value_stack.md",
+        package_dir / "preview" / "sales_page_preview.html",
+    ]
+    text = "\n".join(path.read_text(encoding="utf-8", errors="ignore") for path in targets if path.exists()).lower()
+    signals = {
+        "has_buyer_language": any(word in text for word in ("buyer", "customer", "download", "use")),
+        "has_value_language": any(word in text for word in ("saves", "helps", "included", "what you get", "value")),
+        "has_usage_instructions": "instructions" in text or "how to use" in text,
+    }
+    score = sum(1 for passed in signals.values() if passed)
+    return {"status": "clear" if score >= 2 else "unclear", "signals": signals}
+
+
+def _missing_asset_messages(checks: dict[str, dict]) -> list[str]:
+    return [name.replace("_", " ") for name, item in checks.items() if not item["passed"]]
+
+
+def _readiness_report_markdown(report: dict) -> str:
+    lines = [
+        f"# Readiness Report - {report['title']}",
+        "",
+        f"Overall score: **{report['readiness_score']}/100**",
+        f"Status: **{report['readiness_status']}**",
+        "",
+        "## Hard Blockers",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in report["hard_blockers"] or ["None"])
+    lines.extend(["", "## Score Breakdown", ""])
+    for name, item in report["score_breakdown"].items():
+        status = "PASS" if item["passed"] else "FAIL"
+        lines.append(f"- {name.replace('_', ' ').title()}: {status} ({item['points']} pts)")
+    lines.extend([
+        "",
+        "## Policy Risk",
+        "",
+        f"Risk level: **{report['policy_risk']['risk_level']}**",
+        "",
+        "## Buyer Value Clarity",
+        "",
+        f"Status: **{report['buyer_value_clarity']['status']}**",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def _platform_readiness_markdown(platform_readiness: dict[str, dict]) -> str:
+    lines = ["# Platform Readiness", ""]
+    for platform, item in platform_readiness.items():
+        lines.extend([
+            f"## {platform}",
+            "",
+            f"Status: **{item['status']}**",
+            f"Missing: {', '.join(item['missing']) if item['missing'] else 'None'}",
+            "",
+            "Recommended fixes:",
+            "",
+        ])
+        lines.extend(f"- {fix}" for fix in item["recommended_fixes"] or ["None"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _missing_assets_markdown(checks: dict[str, dict], hard_blockers: list[str]) -> str:
+    lines = ["# Missing Assets", "", "## Hard Blockers", ""]
+    lines.extend(f"- {item}" for item in hard_blockers or ["None"])
+    lines.extend(["", "## Failed Scoring Checks", ""])
+    failed = _missing_asset_messages(checks)
+    lines.extend(f"- {item}" for item in failed or ["None"])
+    return "\n".join(lines) + "\n"
+
+
+def _policy_risk_markdown(policy: dict) -> str:
+    return "\n".join([
+        "# Policy / IP Risk Check",
+        "",
+        f"Risk level: **{policy['risk_level']}**",
+        "",
+        "## High-Risk Keywords",
+        "",
+        *(f"- {kw}" for kw in policy["high_risk_keywords"] or ["None"]),
+        "",
+        "## Medium-Risk Keywords",
+        "",
+        *(f"- {kw}" for kw in policy["medium_risk_keywords"] or ["None"]),
+        "",
+        policy["notes"],
+    ]) + "\n"
+
+
+def _improvement_plan_markdown(report: dict) -> str:
+    lines = ["# Improvement Plan", ""]
+    if report["readiness_status"] == "ready":
+        lines.append("Package is ready by deterministic checks. Human review is still required before publishing.")
+    else:
+        lines.extend([
+            "## Fix These First",
+            "",
+            *(f"- {item}" for item in report["top_blockers"]),
+            "",
+            "## Then Review",
+            "",
+            "- Mockup/cover image quality",
+            "- Marketplace policy compliance",
+            "- Listing copy accuracy",
+            "- Customer instructions and license terms",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def _update_manifest_with_quality(product_id: int, package_dir: Path, report: dict) -> None:
+    manifest_path = package_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+    else:
+        manifest = {}
+    manifest["quality_report"] = {
+        "readiness_report_json": _package_relative(package_dir / "quality" / "readiness_report.json"),
+        "readiness_report_md": _package_relative(package_dir / "quality" / "readiness_report.md"),
+        "platform_readiness": _package_relative(package_dir / "quality" / "platform_readiness.md"),
+        "missing_assets": _package_relative(package_dir / "quality" / "missing_assets.md"),
+        "policy_risk_check": _package_relative(package_dir / "quality" / "policy_risk_check.md"),
+        "improvement_plan": _package_relative(package_dir / "quality" / "improvement_plan.md"),
+    }
+    manifest["readiness_status"] = report["readiness_status"]
+    manifest["readiness_score"] = report["readiness_score"]
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def _refresh_package_zip(product_id: int, package_dir: Path) -> None:
+    zip_path = PRODUCT_ROOT / f"product_{product_id}.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(package_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, arcname=path.relative_to(PRODUCT_ROOT))
 
 
 def _build_package_readme(product: dict, artifact_map: dict[str, dict]) -> str:

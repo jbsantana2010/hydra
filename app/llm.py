@@ -296,6 +296,8 @@ def _completion_budget_for(purpose: str) -> int:
         return 2000
     if purpose in ("market_pattern_extraction", "market_opportunity_generation"):
         return 1600
+    if purpose == "kit_doc_sections":
+        return 4000
     return 300
 
 

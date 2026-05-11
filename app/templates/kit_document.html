@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ document.title }} — {{ kit.name }}</title>
+<style>
+/* ─── KIT PROFESSIONAL DOCUMENT SYSTEM ──────────────────────────────────── */
+/* Sprint 2.2 — HYDRA Commercial Grade Visual Layer                          */
+/* Target: Consulting-deliverable quality. NOT planner. NOT blog post.       */
+
+:root {
+  --navy:        #1a2744;
+  --navy-mid:    #253660;
+  --navy-light:  #e8edf5;
+  --gold:        #c9a84c;
+  --gold-light:  #f5edd6;
+  --cream:       #fafaf8;
+  --white:       #ffffff;
+  --gray-50:     #f8f8f5;
+  --gray-100:    #f0f0eb;
+  --gray-200:    #e2e2db;
+  --gray-400:    #9ca3af;
+  --gray-600:    #6b7280;
+  --text:        #111827;
+  --text-muted:  #4b5563;
+  --green:       #15803d;
+  --green-light: #f0fdf4;
+  --blue:        #1d4ed8;
+  --blue-light:  #eff6ff;
+  --amber:       #b45309;
+  --amber-light: #fffbeb;
+  --purple:      #7c3aed;
+  --purple-light:#f5f3ff;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --font-mono: "Courier New", Courier, monospace;
+
+  --radius: 6px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow:    0 2px 8px rgba(0,0,0,0.10);
+}
+
+/* ─── RESET ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; }
+
+/* ─── PAGE / PRINT SETUP ─────────────────────────────────────────────────── */
+@page {
+  size: Letter;
+  margin: 2.2cm 2.4cm 2.4cm 2.4cm;
+  @bottom-center {
+    content: "{{ kit.name }}  ·  {{ document.title }}";
+    font-family: var(--font-sans);
+    font-size: 8pt;
+    color: var(--gray-400);
+    letter-spacing: 0.02em;
+  }
+  @bottom-right {
+    content: counter(page);
+    font-family: var(--font-sans);
+    font-size: 8pt;
+    color: var(--gray-400);
+  }
+}
+@page :first { margin: 0; @bottom-center { content: none; } @bottom-right { content: none; } }
+
+body {
+  font-family: var(--font-sans);
+  font-size: 10.5pt;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--white);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- COVER PAGE                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div class="cover-page">
+  <div class="cover-top-bar"></div>
+
+  <div class="cover-body">
+    <div class="cover-kit-label">{{ kit.name }}  ·  {{ kit.edition }}</div>
+
+    <div class="cover-doc-number">{{ document.number }}</div>
+
+    <h1 class="cover-title">{{ document.title }}</h1>
+    <p class="cover-subtitle">{{ document.subtitle }}</p>
+
+    <div class="cover-divider"></div>
+
+    <div class="cover-meta">
+      <span class="cover-meta-item">{{ document.page_count }}</span>
+      <span class="cover-meta-sep">·</span>
+      <span class="cover-meta-item">{{ document.time_to_implement }}</span>
+      <span class="cover-meta-sep">·</span>
+      <span class="cover-meta-item">{{ kit.edition }}</span>
+    </div>
+  </div>
+
+  <div class="cover-footer">
+    <div class="cover-footer-logo">HYDRA</div>
+    <div class="cover-footer-tag">{{ kit.tagline }}</div>
+  </div>
+</div>
+
+<div class="page-break"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- DOCUMENT HEADER STRIP (non-cover pages)                                -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<div class="doc-header-strip">
+  <span class="doc-header-kit">{{ kit.name }}</span>
+  <span class="doc-header-doc">{{ document.number }} · {{ document.title }}</span>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- PURPOSE STATEMENT                                                       -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+{% if document.purpose %}
+<div class="purpose-block">
+  <div class="purpose-label">WHAT THIS DOCUMENT DOES</div>
+  <p class="purpose-text">{{ document.purpose }}</p>
+  {% if document.time_to_implement %}
+  <div class="purpose-time">⏱ Implementation time: <strong>{{ document.time_to_implement }}</strong></div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- TABLE OF CONTENTS                                                       -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+{% if document.toc and document.toc|length > 3 %}
+<div class="toc-block">
+  <div class="toc-label">CONTENTS</div>
+  <ol class="toc-list">
+    {% for item in document.toc %}
+    <li class="toc-item">
+      <span class="toc-title">{{ item.title }}</span>
+      <span class="toc-dots"></span>
+      <span class="toc-num">{{ item.page }}</span>
+    </li>
+    {% endfor %}
+  </ol>
+</div>
+{% endif %}
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CONTENT SECTIONS                                                        -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+{% for section in sections %}
+
+  {# ── PROSE SECTION ──────────────────────────────────────────────────── #}
+  {% if section.type == "prose" %}
+  <div class="section section-prose">
+    {% if section.heading %}
+      {% if section.level == 1 %}
+      <h1 class="h1">{{ section.heading }}</h1>
+      {% elif section.level == 3 %}
+      <h3 class="h3">{{ section.heading }}</h3>
+      {% else %}
+      <h2 class="h2">{{ section.heading }}</h2>
+      {% endif %}
+    {% endif %}
+    {% for para in section.paragraphs %}
+    <p class="prose">{{ para }}</p>
+    {% endfor %}
+  </div>
+
+  {# ── WORKFLOW STEPS ──────────────────────────────────────────────────── #}
+  {% elif section.type == "workflow" %}
+  <div class="section section-workflow">
+    {% if section.heading %}<h2 class="h2">{{ section.heading }}</h2>{% endif %}
+    {% if section.intro %}<p class="prose">{{ section.intro }}</p>{% endif %}
+    <div class="workflow-steps">
+      {% for step in section.steps %}
+      <div class="workflow-step">
+        <div class="step-num">{{ loop.index }}</div>
+        <div class="step-body">
+          <div class="step-title">{{ step.title }}</div>
+          <div class="step-desc">{{ step.description }}</div>
+          {% if step.note %}
+          <div class="step-note">{{ step.note }}</div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ── PROMPT BLOCK ────────────────────────────────────────────────────── #}
+  {% elif section.type == "prompt_block" %}
+  <div class="section section-prompt">
+    {% if section.heading %}<h2 class="h2">{{ section.heading }}</h2>{% endif %}
+    {% if section.intro %}<p class="prose">{{ section.intro }}</p>{% endif %}
+    {% for prompt in section.prompts %}
+    <div class="prompt-card">
+      <div class="prompt-header">
+        <span class="prompt-label">PROMPT</span>
+        <span class="prompt-name">{{ prompt.name }}</span>
+      </div>
+      <div class="prompt-body">{{ prompt.text }}</div>
+      {% if prompt.fill_in_fields %}
+      <div class="prompt-fields">
+        <span class="prompt-fields-label">Fill in:</span>
+        {% for field in prompt.fill_in_fields %}
+        <span class="prompt-field-tag">{{ field }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if prompt.example_output %}
+      <div class="prompt-example">
+        <div class="prompt-example-label">EXAMPLE OUTPUT</div>
+        <div class="prompt-example-text">{{ prompt.example_output }}</div>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── CALLOUT ─────────────────────────────────────────────────────────── #}
+  {% elif section.type == "callout" %}
+  <div class="callout callout-{{ section.variant }}">
+    <div class="callout-icon">
+      {% if section.variant == "quick_win" %}⚡{% elif section.variant == "pro_tip" %}💡{% elif section.variant == "time_saver" %}⏱{% elif section.variant == "warning" %}⚠{% else %}→{% endif %}
+    </div>
+    <div class="callout-body">
+      <div class="callout-title">{{ section.title }}</div>
+      <div class="callout-text">{{ section.content }}</div>
+    </div>
+  </div>
+
+  {# ── CHECKLIST ───────────────────────────────────────────────────────── #}
+  {% elif section.type == "checklist" %}
+  <div class="section section-checklist">
+    {% if section.heading %}<h2 class="h2">{{ section.heading }}</h2>{% endif %}
+    {% if section.intro %}<p class="prose">{{ section.intro }}</p>{% endif %}
+    <div class="checklist">
+      {% for item in section['items'] %}
+      <div class="checklist-item">
+        <div class="check-box"></div>
+        <div class="check-text">
+          {% if item is string %}{{ item }}
+          {% else %}<strong>{{ item.title }}</strong>{% if item.detail %} — {{ item.detail }}{% endif %}
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ── TABLE ───────────────────────────────────────────────────────────── #}
+  {% elif section.type == "table" %}
+  <div class="section section-table">
+    {% if section.heading %}<h2 class="h2">{{ section.heading }}</h2>{% endif %}
+    {% if section.intro %}<p class="prose">{{ section.intro }}</p>{% endif %}
+    <table class="data-table">
+      <thead>
+        <tr>{% for col in section.columns %}<th>{{ col }}</th>{% endfor %}</tr>
+      </thead>
+      <tbody>
+        {% for row in section.rows %}
+        <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# ── QUICK WIN BOX ───────────────────────────────────────────────────── #}
+  {% elif section.type == "quick_win_box" %}
+  <div class="quick-win-box">
+    <div class="qw-header">
+      <span class="qw-icon">⚡</span>
+      <span class="qw-label">QUICK WIN — {{ section.time }}</span>
+    </div>
+    <h3 class="qw-title">{{ section.title }}</h3>
+    <p class="qw-desc">{{ section.description }}</p>
+    {% if section.steps %}
+    <ol class="qw-steps">
+      {% for step in section.steps %}
+      <li>{{ step }}</li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+  </div>
+
+  {# ── IMPLEMENTATION ROADMAP ──────────────────────────────────────────── #}
+  {% elif section.type == "roadmap" %}
+  <div class="section section-roadmap">
+    {% if section.heading %}<h2 class="h2">{{ section.heading }}</h2>{% endif %}
+    <div class="roadmap-track">
+      {% for phase in section.phases %}
+      <div class="roadmap-phase">
+        <div class="roadmap-phase-header">
+          <div class="roadmap-phase-num">Phase {{ loop.index }}</div>
+          <div class="roadmap-phase-time">{{ phase.time }}</div>
+        </div>
+        <div class="roadmap-phase-title">{{ phase.title }}</div>
+        <ul class="roadmap-tasks">
+          {% for task in phase.tasks %}
+          <li>{{ task }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ── SECTION DIVIDER ─────────────────────────────────────────────────── #}
+  {% elif section.type == "divider" %}
+  <div class="section-divider">
+    {% if section.label %}<span class="divider-label">{{ section.label }}</span>{% endif %}
+  </div>
+
+  {# ── PAGE BREAK ──────────────────────────────────────────────────────── #}
+  {% elif section.type == "page_break" %}
+  <div class="page-break"></div>
+
+{% endif %}
+{% endfor %}
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CSS STYLES CONTINUED                                                    -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<style>
+
+/* ─── COVER PAGE ─────────────────────────────────────────────────────────── */
+.cover-page {
+  width: 100vw; height: 100vh;
+  background: var(--navy);
+  display: flex; flex-direction: column;
+  page-break-after: always;
+  position: relative;
+  overflow: hidden;
+}
+.cover-top-bar {
+  height: 8px;
+  background: linear-gradient(90deg, var(--gold) 0%, #e8c46a 100%);
+  flex-shrink: 0;
+}
+.cover-body {
+  flex: 1;
+  padding: 60px 72px 48px 72px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.cover-kit-label {
+  font-size: 9pt; font-weight: 600; letter-spacing: 0.12em;
+  color: var(--gold); text-transform: uppercase;
+  margin-bottom: 40px;
+}
+.cover-doc-number {
+  font-size: 72pt; font-weight: 800; line-height: 1;
+  color: rgba(255,255,255,0.08);
+  margin-bottom: -20px;
+}
+.cover-title {
+  font-size: 36pt; font-weight: 700; line-height: 1.15;
+  color: var(--white);
+  margin-bottom: 16px;
+  max-width: 580px;
+}
+.cover-subtitle {
+  font-size: 13pt; font-weight: 400; line-height: 1.5;
+  color: rgba(255,255,255,0.72);
+  max-width: 520px;
+  margin-bottom: 40px;
+}
+.cover-divider {
+  width: 60px; height: 3px;
+  background: var(--gold);
+  margin-bottom: 28px;
+}
+.cover-meta { display: flex; align-items: center; gap: 12px; }
+.cover-meta-item {
+  font-size: 8.5pt; font-weight: 500; letter-spacing: 0.04em;
+  color: rgba(255,255,255,0.55);
+}
+.cover-meta-sep { color: rgba(255,255,255,0.25); font-size: 10pt; }
+.cover-footer {
+  padding: 28px 72px;
+  border-top: 1px solid rgba(255,255,255,0.12);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cover-footer-logo {
+  font-size: 9pt; font-weight: 700; letter-spacing: 0.14em;
+  color: rgba(255,255,255,0.35); text-transform: uppercase;
+}
+.cover-footer-tag {
+  font-size: 8.5pt; font-weight: 400;
+  color: rgba(255,255,255,0.28);
+}
+
+/* ─── DOC HEADER STRIP ───────────────────────────────────────────────────── */
+.doc-header-strip {
+  display: flex; justify-content: space-between; align-items: center;
+  border-bottom: 2px solid var(--navy);
+  padding-bottom: 10px;
+  margin-bottom: 28px;
+}
+.doc-header-kit {
+  font-size: 8pt; font-weight: 700; letter-spacing: 0.10em;
+  color: var(--navy); text-transform: uppercase;
+}
+.doc-header-doc {
+  font-size: 8pt; font-weight: 500; letter-spacing: 0.04em;
+  color: var(--gray-600);
+}
+
+/* ─── PURPOSE BLOCK ─────────────────────────────────────────────────────── */
+.purpose-block {
+  background: var(--navy-light);
+  border-left: 4px solid var(--navy);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 20px 24px;
+  margin-bottom: 32px;
+}
+.purpose-label {
+  font-size: 7.5pt; font-weight: 700; letter-spacing: 0.12em;
+  color: var(--navy); text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.purpose-text {
+  font-size: 10.5pt; line-height: 1.6; color: var(--text);
+  margin-bottom: 10px;
+}
+.purpose-time {
+  font-size: 9pt; color: var(--navy-mid);
+}
+
+/* ─── TABLE OF CONTENTS ─────────────────────────────────────────────────── */
+.toc-block {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius);
+  padding: 24px 28px;
+  margin-bottom: 36px;
+}
+.toc-label {
+  font-size: 7.5pt; font-weight: 700; letter-spacing: 0.12em;
+  color: var(--navy); text-transform: uppercase;
+  margin-bottom: 14px;
+}
+.toc-list { list-style: none; }
+.toc-item {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--gray-200);
+  font-size: 10pt;
+}
+.toc-item:last-child { border-bottom: none; }
+.toc-title { font-weight: 500; color: var(--text); flex-shrink: 0; }
+.toc-dots { flex: 1; border-bottom: 2px dotted var(--gray-200); margin: 0 8px; position: relative; top: -3px; }
+.toc-num { font-weight: 600; color: var(--navy); flex-shrink: 0; }
+
+/* ─── HEADINGS ───────────────────────────────────────────────────────────── */
+.h1 {
+  font-size: 22pt; font-weight: 700; color: var(--navy);
+  padding-bottom: 12px;
+  border-bottom: 3px solid var(--gold);
+  margin-top: 36px; margin-bottom: 20px;
+  page-break-after: avoid;
+}
+.h2 {
+  font-size: 14pt; font-weight: 700; color: var(--navy);
+  margin-top: 28px; margin-bottom: 14px;
+  padding-left: 14px;
+  border-left: 4px solid var(--gold);
+  page-break-after: avoid;
+}
+.h3 {
+  font-size: 11.5pt; font-weight: 700; color: var(--navy-mid);
+  margin-top: 20px; margin-bottom: 10px;
+  page-break-after: avoid;
+}
+.prose {
+  margin-bottom: 14px; line-height: 1.7;
+  color: var(--text);
+}
+
+/* ─── WORKFLOW STEPS ─────────────────────────────────────────────────────── */
+.workflow-steps { margin: 18px 0; }
+.workflow-step {
+  display: flex; gap: 20px; align-items: flex-start;
+  margin-bottom: 20px;
+  page-break-inside: avoid;
+}
+.step-num {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--navy); color: var(--white);
+  font-size: 13pt; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; margin-top: 2px;
+}
+.step-body { flex: 1; }
+.step-title {
+  font-size: 11pt; font-weight: 700; color: var(--navy);
+  margin-bottom: 4px;
+}
+.step-desc { font-size: 10pt; line-height: 1.65; color: var(--text-muted); }
+.step-note {
+  margin-top: 8px; padding: 8px 12px;
+  background: var(--gold-light);
+  border-radius: var(--radius);
+  font-size: 9.5pt; color: var(--amber);
+  font-style: italic;
+}
+
+/* ─── PROMPT BLOCKS ─────────────────────────────────────────────────────── */
+.prompt-card {
+  border: 1.5px solid var(--navy-light);
+  border-radius: var(--radius);
+  margin: 18px 0;
+  overflow: hidden;
+  page-break-inside: avoid;
+}
+.prompt-header {
+  background: var(--navy);
+  padding: 10px 16px;
+  display: flex; align-items: center; gap: 12px;
+}
+.prompt-label {
+  font-size: 7pt; font-weight: 700; letter-spacing: 0.12em;
+  color: var(--gold); text-transform: uppercase;
+  background: rgba(201,168,76,0.18);
+  padding: 3px 8px; border-radius: 3px;
+}
+.prompt-name {
+  font-size: 9.5pt; font-weight: 600; color: var(--white);
+}
+.prompt-body {
+  background: var(--gray-50);
+  padding: 16px 18px;
+  font-family: var(--font-mono);
+  font-size: 9pt; line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.prompt-fields {
+  padding: 10px 18px;
+  background: var(--white);
+  border-top: 1px solid var(--gray-200);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.prompt-fields-label {
+  font-size: 8.5pt; font-weight: 700; color: var(--gray-600);
+}
+.prompt-field-tag {
+  font-size: 8pt; font-weight: 500;
+  background: var(--navy-light); color: var(--navy);
+  padding: 3px 9px; border-radius: 12px;
+}
+.prompt-example {
+  padding: 14px 18px;
+  background: var(--green-light);
+  border-top: 1px solid #bbf7d0;
+}
+.prompt-example-label {
+  font-size: 7.5pt; font-weight: 700; letter-spacing: 0.10em;
+  color: var(--green); text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.prompt-example-text {
+  font-size: 9.5pt; line-height: 1.65; color: #166534;
+  font-style: italic;
+}
+
+/* ─── CALLOUTS ───────────────────────────────────────────────────────────── */
+.callout {
+  display: flex; gap: 16px; align-items: flex-start;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  margin: 20px 0;
+  page-break-inside: avoid;
+  border-left: 4px solid;
+}
+.callout-quick_win  { background: var(--amber-light); border-color: var(--amber); }
+.callout-pro_tip    { background: var(--blue-light);  border-color: var(--blue);  }
+.callout-time_saver { background: var(--purple-light);border-color: var(--purple);}
+.callout-warning    { background: #fff7ed;             border-color: #f97316;      }
+.callout-icon { font-size: 14pt; flex-shrink: 0; line-height: 1.4; }
+.callout-body { flex: 1; }
+.callout-title {
+  font-size: 9pt; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; margin-bottom: 5px;
+}
+.callout-quick_win  .callout-title { color: var(--amber); }
+.callout-pro_tip    .callout-title { color: var(--blue);  }
+.callout-time_saver .callout-title { color: var(--purple);}
+.callout-warning    .callout-title { color: #c2410c;       }
+.callout-text { font-size: 10pt; line-height: 1.6; color: var(--text); }
+
+/* ─── CHECKLISTS ─────────────────────────────────────────────────────────── */
+.checklist { margin: 14px 0; }
+.checklist-item {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--gray-100);
+  page-break-inside: avoid;
+}
+.checklist-item:first-child { border-top: 1px solid var(--gray-100); }
+.check-box {
+  width: 18px; height: 18px; border-radius: 4px;
+  border: 2px solid var(--gray-400);
+  flex-shrink: 0; margin-top: 2px;
+}
+.check-text { font-size: 10pt; line-height: 1.5; color: var(--text); }
+
+/* ─── TABLES ─────────────────────────────────────────────────────────────── */
+.data-table {
+  width: 100%; border-collapse: collapse;
+  margin: 16px 0; font-size: 9.5pt;
+  page-break-inside: avoid;
+}
+.data-table thead tr {
+  background: var(--navy); color: var(--white);
+}
+.data-table th {
+  padding: 10px 14px; text-align: left;
+  font-weight: 700; font-size: 8.5pt;
+  letter-spacing: 0.04em;
+}
+.data-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--gray-200);
+  vertical-align: top;
+}
+.data-table tbody tr:nth-child(even) { background: var(--gray-50); }
+
+/* ─── QUICK WIN BOX ─────────────────────────────────────────────────────── */
+.quick-win-box {
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 100%);
+  border-radius: var(--radius);
+  padding: 28px 32px;
+  margin: 24px 0;
+  color: var(--white);
+  page-break-inside: avoid;
+}
+.qw-header {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 14px;
+}
+.qw-icon { font-size: 16pt; }
+.qw-label {
+  font-size: 8pt; font-weight: 700; letter-spacing: 0.12em;
+  color: var(--gold); text-transform: uppercase;
+}
+.qw-title {
+  font-size: 14pt; font-weight: 700; color: var(--white);
+  margin-bottom: 10px;
+}
+.qw-desc { font-size: 10pt; line-height: 1.65; color: rgba(255,255,255,0.80); margin-bottom: 16px; }
+.qw-steps {
+  margin-left: 18px;
+  font-size: 9.5pt; line-height: 1.6;
+  color: rgba(255,255,255,0.80);
+}
+.qw-steps li { margin-bottom: 6px; }
+
+/* ─── IMPLEMENTATION ROADMAP ─────────────────────────────────────────────── */
+.roadmap-track {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+.roadmap-phase {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-top: 3px solid var(--navy);
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 16px;
+  page-break-inside: avoid;
+}
+.roadmap-phase-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px;
+}
+.roadmap-phase-num {
+  font-size: 7.5pt; font-weight: 700; letter-spacing: 0.10em;
+  text-transform: uppercase; color: var(--navy);
+}
+.roadmap-phase-time {
+  font-size: 7.5pt; font-weight: 600;
+  color: var(--gold); background: var(--gold-light);
+  padding: 2px 7px; border-radius: 10px;
+}
+.roadmap-phase-title {
+  font-size: 10.5pt; font-weight: 700; color: var(--navy);
+  margin-bottom: 10px;
+}
+.roadmap-tasks {
+  margin-left: 14px;
+  font-size: 9pt; line-height: 1.6; color: var(--text-muted);
+}
+.roadmap-tasks li { margin-bottom: 4px; }
+
+/* ─── SECTION DIVIDER ───────────────────────────────────────────────────── */
+.section-divider {
+  display: flex; align-items: center; gap: 16px;
+  margin: 32px 0;
+}
+.section-divider::before, .section-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--gray-200);
+}
+.divider-label {
+  font-size: 8pt; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--gray-400);
+  flex-shrink: 0;
+}
+
+/* ─── PAGE BREAK ─────────────────────────────────────────────────────────── */
+.page-break { page-break-after: always; }
+.section { margin-bottom: 8px; }
+</style>
+
+</body>
+</html>

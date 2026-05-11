@@ -77,6 +77,56 @@
     {% endif %}
   </section>
 
+  <h3>Professional Business Kit</h3>
+  <section class="panel">
+    <p class="muted">
+      Build and review the Sprint 2.2 consulting-style kit assets for this product: covers, HTML documents, PDFs, and delivery ZIP.
+    </p>
+    <a class="button" href="/kits/{{ product.id }}">Open Kit Builder</a>
+  </section>
+
+  <h3>Package Quality / Upload Readiness</h3>
+  <section class="panel">
+    <p class="muted">
+      Scores package completeness, listing readiness, visual readiness, marketplace readiness, policy/IP risk, and buyer-value clarity.
+    </p>
+    <form method="post" action="/products/{{ product.id }}/quality-check" style="margin:10px 0;">
+      <button type="submit">Run Readiness Check</button>
+    </form>
+    {% if readiness_report %}
+      <p>
+        <strong>Overall score:</strong> {{ readiness_report.readiness_score }}/100
+        · <strong>Status:</strong>
+        <span class="badge {% if readiness_report.readiness_status == 'ready' %}good{% else %}warn{% endif %}">
+          {{ readiness_report.readiness_status }}
+        </span>
+      </p>
+      {% if readiness_report.top_blockers %}
+        <p><strong>Top blockers:</strong></p>
+        <ul>
+          {% for blocker in readiness_report.top_blockers[:5] %}
+            <li>{{ blocker }}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No hard blockers found.</p>
+      {% endif %}
+      {% if readiness_report.platform_readiness %}
+        <p><strong>Platform readiness:</strong></p>
+        <ul>
+          {% for platform, summary in readiness_report.platform_readiness.items() %}
+            <li><strong>{{ platform }}:</strong> {{ summary.status }}{% if summary.missing %} — missing {{ summary.missing | join(", ") }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <p class="muted">
+        Report path: <code>{{ readiness_report.report_paths.readiness_report_json }}</code>
+      </p>
+    {% else %}
+      <p class="muted">No readiness report yet. Build a package, then run the readiness check.</p>
+    {% endif %}
+  </section>
+
   {# ── Sprint 1.5.1: Latest LLM Activity (last 5 calls) ── #}
   {% if recent_llm_calls %}
     <details style="margin-bottom:16px;">

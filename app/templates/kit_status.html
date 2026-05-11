@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.kit-header { background:#1a2744; color:#fff; padding:28px 32px; border-radius:8px; margin-bottom:24px; }
+.kit-header h1 { font-size:1.5rem; font-weight:700; margin:0 0 6px 0; }
+.kit-header p  { margin:0; color:rgba(255,255,255,0.65); font-size:0.92rem; }
+.kit-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }
+.kit-card { background:#f9f9f7; border:1px solid #e2e2db; border-radius:8px; padding:20px; }
+.kit-card h3 { font-size:0.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#6b7280; margin:0 0 14px 0; }
+.file-list { list-style:none; padding:0; margin:0; }
+.file-list li { display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-bottom:1px solid #efefeb; font-size:0.875rem; }
+.file-list li:last-child { border-bottom:none; }
+.file-list a { color:#1a2744; font-weight:500; text-decoration:none; }
+.file-list a:hover { text-decoration:underline; }
+.file-badge { font-size:0.70rem; font-weight:600; padding:2px 8px; border-radius:10px; }
+.badge-pdf  { background:#e8edf5; color:#1a2744; }
+.badge-svg  { background:#f5edd6; color:#a8882d; }
+.badge-zip  { background:#f0fdf4; color:#15803d; }
+.empty-state { color:#9ca3af; font-size:0.875rem; font-style:italic; padding:8px 0; }
+
+.generate-form { background:#fff; border:1.5px solid #e2e2db; border-radius:8px; padding:24px; margin-bottom:24px; }
+.generate-form h2 { font-size:1rem; font-weight:700; color:#1a2744; margin:0 0 18px 0; }
+.form-row { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px; }
+.form-group label { display:block; font-size:0.80rem; font-weight:600; color:#374151; margin-bottom:5px; }
+.form-group input, .form-group textarea, .form-group select {
+  width:100%; padding:9px 12px; border:1px solid #d1d5db; border-radius:6px;
+  font-size:0.875rem; font-family:inherit;
+}
+.form-group textarea { min-height:72px; resize:vertical; }
+.btn-generate {
+  background:#1a2744; color:#fff; font-weight:700; font-size:0.90rem;
+  padding:11px 28px; border:none; border-radius:6px; cursor:pointer;
+}
+.btn-generate:hover { background:#253660; }
+.btn-covers {
+  background:#f5edd6; color:#a8882d; font-weight:700; font-size:0.85rem;
+  padding:9px 20px; border:1px solid #c9a84c; border-radius:6px; cursor:pointer;
+  margin-left:10px;
+}
+.flash-success { background:#f0fdf4; border:1px solid #bbf7d0; color:#15803d; padding:12px 18px; border-radius:6px; margin-bottom:18px; font-size:0.90rem; }
+.flash-error   { background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; padding:12px 18px; border-radius:6px; margin-bottom:18px; font-size:0.90rem; }
+.cover-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; margin-top:10px; }
+.cover-thumb { border:1px solid #e2e2db; border-radius:6px; overflow:hidden; text-align:center; }
+.cover-thumb img { width:100%; height:auto; display:block; }
+.cover-thumb a { display:block; font-size:0.72rem; padding:5px 4px; color:#6b7280; background:#f9f9f7; text-decoration:none; }
+</style>
+
+{% if flash == "success" %}
+<div class="flash-success">✓ {{ msg }}</div>
+{% elif flash == "error" %}
+<div class="flash-error">✗ {{ msg }}</div>
+{% endif %}
+
+<div class="kit-header">
+  <h1>{{ product.title or "Product " ~ product.id }} — AI Implementation Kit</h1>
+  <p>Product #{{ product.id }} · Kit generation console</p>
+</div>
+
+<!-- ── Generate Form ────────────────────────────────────────────────────── -->
+<div class="generate-form">
+  <h2>Generate Kit</h2>
+  <form method="POST" action="/kits/{{ product.id }}/generate">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Kit Name</label>
+        <input type="text" name="kit_name" value="Real Estate AI Mastery Kit" required>
+      </div>
+      <div class="form-group">
+        <label>Edition</label>
+        <input type="text" name="kit_edition" value="2026 Edition">
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:14px">
+      <label>Kit Tagline (one line)</label>
+      <input type="text" name="kit_tagline" value="The complete AI implementation system for modern agents">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Niche</label>
+        <input type="text" name="niche" value="Real Estate Agents">
+      </div>
+      <div class="form-group">
+        <label>Theme</label>
+        <select name="theme">
+          <option value="real_estate" selected>Real Estate (Navy/Gold)</option>
+          <option value="default">Default (Navy/Blue)</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group" style="margin-bottom:18px">
+      <label>Niche Context (optional — additional LLM guidance)</label>
+      <textarea name="niche_context" placeholder="e.g. Focus on solo agents in competitive urban markets, buyers side emphasis..."></textarea>
+    </div>
+    <button type="submit" class="btn-generate">⚙ Generate Full Kit (8 Documents)</button>
+  </form>
+  <form method="POST" action="/kits/{{ product.id }}/covers?kit_name=Real+Estate+AI+Mastery+Kit&kit_tagline=The+complete+AI+implementation+system+for+modern+agents" style="display:inline">
+    <button type="submit" class="btn-covers">◈ Covers Only (Fast, No LLM)</button>
+  </form>
+</div>
+
+<!-- ── Generated Assets ─────────────────────────────────────────────────── -->
+<div class="kit-grid">
+  <div class="kit-card">
+    <h3>PDF Documents ({{ pdfs|length }})</h3>
+    {% if pdfs %}
+    <ul class="file-list">
+      {% for f in pdfs %}
+      <li>
+        <a href="/kits/{{ product.id }}/download/{{ f }}">{{ f }}</a>
+        <span class="file-badge badge-pdf">PDF</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty-state">No PDFs generated yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="kit-card">
+    <h3>Kit Info</h3>
+    <ul class="file-list">
+      <li><span>Product ID</span> <strong>#{{ product.id }}</strong></li>
+      <li><span>Documents</span> <strong>{{ pdfs|length }} / 8</strong></li>
+      <li><span>Output dir</span> <code style="font-size:0.75rem">{{ product_dir }}</code></li>
+      {% if zip_file %}
+      <li>
+        <a href="/kits/{{ product.id }}/download/{{ zip_file }}">⬇ Download ZIP</a>
+        <span class="file-badge badge-zip">ZIP</span>
+      </li>
+      {% endif %}
+    </ul>
+    <div style="margin-top:16px">
+      <form method="POST" action="/kits/{{ product.id }}/delete" onsubmit="return confirm('Delete all generated kit assets?')">
+        <button type="submit" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:7px 16px;border-radius:6px;font-size:0.82rem;cursor:pointer">
+          🗑 Delete Generated Assets
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ── SVG Covers ───────────────────────────────────────────────────────── -->
+{% if covers %}
+<div class="kit-card" style="margin-bottom:24px">
+  <h3>SVG Cover Assets ({{ covers|length }})</h3>
+  <div class="cover-grid">
+    {% for c in covers %}
+    <div class="cover-thumb">
+      <a href="/kits/{{ product.id }}/download/{{ c }}" title="{{ c }}">
+        <img src="/kits/{{ product.id }}/download/{{ c }}" alt="{{ c }}" loading="lazy">
+      </a>
+      <a href="/kits/{{ product.id }}/download/{{ c }}">{{ c }}</a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Back link ─────────────────────────────────────────────────────────── -->
+<a href="/products/{{ product.id }}/edit" style="color:#1a2744;font-size:0.875rem">← Back to product</a>
+
+{% endblock %}
