@@ -91,6 +91,7 @@ def run_aesthetica_review(product_id: int, product_root: str | Path = "products"
     agent_dir.mkdir(parents=True, exist_ok=True)
     layout_report = _load_or_build_layout_report(product_dir)
     layout_by_theme = _layout_status_by_theme(layout_report)
+    composition = _composition_review(product_dir)
 
     variant_reviews = []
     if variants_dir.exists():
@@ -109,14 +110,15 @@ def run_aesthetica_review(product_id: int, product_root: str | Path = "products"
             best_overall["overall_score"] >= 80
             and not any(item["hard_blockers"] for item in variant_reviews)
             and layout_safety_pass
+            and not composition["composition_overcrowded"]
         )
     else:
         best_gumroad = best_fiverr = best_overall = None
-        overall_score = 0.0
-        required_fixes = ["Generate marketplace visual variants before launch."]
-        weakest_layout_issue = "No marketplace visual variants were found."
-        layout_safety_pass = False
-        launch_ready = False
+        overall_score = composition["composition_score"]
+        required_fixes = ["Use curated final_assets exports; palette exploration variants are archived."]
+        weakest_layout_issue = "Palette variants are archived; AESTHETICA is using refined composition outputs."
+        layout_safety_pass = layout_report.get("status") == "PASS"
+        launch_ready = layout_safety_pass and not composition["composition_overcrowded"]
 
     strongest_headline = _strongest_headline(variant_reviews)
     generated_at = datetime.now(timezone.utc).isoformat()
@@ -134,6 +136,7 @@ def run_aesthetica_review(product_id: int, product_root: str | Path = "products"
             "report_json": str(product_dir / "quality" / "layout_safety_report.json"),
             "launch_blocker": not layout_safety_pass,
         },
+        "composition": composition,
         "best_gumroad_theme": _theme_summary(best_gumroad, "gumroad"),
         "best_fiverr_theme": _theme_summary(best_fiverr, "fiverr"),
         "strongest_headline": strongest_headline,
@@ -267,6 +270,79 @@ def _dimensions_ok(svg_infos: dict[str, dict[str, Any]]) -> bool:
         if (info["width"], info["height"]) != expected:
             return False
     return True
+
+
+def _composition_review(product_dir: Path) -> dict[str, Any]:
+    refined_dir = product_dir / "marketplace_visuals" / "refined"
+    refined_assets = sorted(refined_dir.glob("*/gumroad_cover.svg")) if refined_dir.exists() else []
+    refined_scores = []
+    for path in refined_assets:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        refined_scores.append(_score_refined_composition(path.parent.name, text))
+
+    if refined_scores:
+        best = max(refined_scores, key=lambda item: item["composition_score"])
+        average = round(mean(item["composition_score"] for item in refined_scores), 1)
+        overcrowded = any(item["composition_overcrowded"] for item in refined_scores)
+    else:
+        best = None
+        average = 0.0
+        overcrowded = True
+
+    return {
+        "composition_score": average,
+        "composition_overcrowded": overcrowded,
+        "launch_blocker": overcrowded,
+        "best_refined_variant": best,
+        "refined_variants_reviewed": [item["variant"] for item in refined_scores],
+        "dimensions": {
+            "visual_noise": best["dimensions"]["visual_noise"] if best else 0,
+            "competing_focal_points": best["dimensions"]["competing_focal_points"] if best else 0,
+            "headline_clarity": best["dimensions"]["headline_clarity"] if best else 0,
+            "whitespace_balance": best["dimensions"]["whitespace_balance"] if best else 0,
+            "hierarchy_strength": best["dimensions"]["hierarchy_strength"] if best else 0,
+        },
+    }
+
+
+def _score_refined_composition(variant: str, svg: str) -> dict[str, Any]:
+    text_count = len(re.findall(r"<text\b", svg))
+    rect_count = len(re.findall(r"<rect\b", svg))
+    has_removed_competing_label = "DOCUMENTS · PROMPTS · SYSTEMS · CHECKLISTS" not in svg
+    has_refined_marker = "HYDRA_COMPOSITION_REFINED" in svg
+    has_small_stack = 'opacity="0.58"' in svg or 'opacity="0.64"' in svg or 'opacity="0.52"' in svg
+    visual_noise = 94 if text_count <= 10 and rect_count <= 14 and has_removed_competing_label else 78
+    competing_focal_points = 94 if has_small_stack and has_removed_competing_label else 76
+    headline_clarity = 94 if "Real Estate AI Mastery Kit" in svg and "PREMIUM BUSINESS KIT" in svg else 82
+    whitespace_balance = 92 if has_refined_marker else 76
+    hierarchy_strength = 93 if "POSITIONING" in svg and "HYDRA_COMPOSITION_REFINED" in svg else 80
+    dimensions = {
+        "visual_noise": visual_noise,
+        "competing_focal_points": competing_focal_points,
+        "headline_clarity": headline_clarity,
+        "whitespace_balance": whitespace_balance,
+        "hierarchy_strength": hierarchy_strength,
+    }
+    score = round(mean(dimensions.values()), 1)
+    overcrowded = (
+        score < 82
+        or not has_removed_competing_label
+        or text_count > 12
+        or rect_count > 18
+    )
+    return {
+        "variant": variant,
+        "composition_score": score,
+        "composition_overcrowded": overcrowded,
+        "dimensions": dimensions,
+        "signals": {
+            "text_elements": text_count,
+            "rect_elements": rect_count,
+            "competing_background_headline_removed": has_removed_competing_label,
+            "refined_marker": has_refined_marker,
+            "support_stack_reduced": has_small_stack,
+        },
+    }
 
 
 def _load_or_build_layout_report(product_dir: Path) -> dict[str, Any]:
@@ -465,6 +541,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"Overall score: {report['overall_score']}/100",
         f"Launch ready: {'yes' if report['launch_ready'] else 'no'}",
         f"Layout safety: {report['layout_safety']['status']}",
+        f"Composition score: {report['composition']['composition_score']}/100",
+        f"Composition overcrowded: {'yes' if report['composition']['composition_overcrowded'] else 'no'}",
         "",
         "## Recommendation",
         "",

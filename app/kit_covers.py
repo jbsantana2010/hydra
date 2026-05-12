@@ -151,6 +151,35 @@ MARKETPLACE_FILES = {
 }
 MARKETPLACE_KIND_BY_FILE = {filename: kind for kind, filename in MARKETPLACE_FILES.items()}
 BUYER_OUTCOME_COPY = "Save hours on listings, follow-up, and reviews."
+REFINED_COMPOSITIONS = {
+    "minimal_enterprise": {
+        "name": "Minimal Enterprise",
+        "headline": "Real Estate AI Mastery Kit",
+        "subheadline": "AI workflows for faster listings, follow-up, and client communication.",
+        "positioning": "A premium implementation system for modern real estate agents.",
+        "module_label": "8-document business kit",
+        "stack_opacity": 0.58,
+        "panel_opacity": 0.92,
+    },
+    "premium_course": {
+        "name": "Premium Course",
+        "headline": "Real Estate AI Mastery Kit",
+        "subheadline": "Client-ready AI systems for agents who want a cleaner operating rhythm.",
+        "positioning": "Practical prompts, workflows, and scripts packaged as a high-value toolkit.",
+        "module_label": "Prompt systems + workflows",
+        "stack_opacity": 0.64,
+        "panel_opacity": 0.94,
+    },
+    "modern_consulting": {
+        "name": "Modern Consulting",
+        "headline": "Real Estate AI Mastery Kit",
+        "subheadline": "A consulting-style AI implementation kit for listings, follow-up, and reviews.",
+        "positioning": "Built for fast adoption without technical setup or agency overhead.",
+        "module_label": "Ready-to-use consulting assets",
+        "stack_opacity": 0.52,
+        "panel_opacity": 0.90,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -385,19 +414,18 @@ def generate_master_cover_svg(
   <rect x="72" y="82" width="244" height="34" rx="17" fill="{c['accent']}" opacity="0.20"/>
   <text x="94" y="105" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="10" font-weight="900" fill="{c['accent']}" letter-spacing="2.4">PREMIUM BUSINESS TOOLKIT</text>
   <text x="{width-72}" y="104" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="10" font-weight="700" fill="{c['text_light']}" opacity="0.58" text-anchor="end">{_esc(kit_edition.upper())}</text>
-  <g transform="translate(476 176) rotate(-10)">{_mini_stack(0, 0, c, 1.18)}</g>
+  <g transform="translate(536 196) rotate(-8)" opacity="0.64">{_mini_stack(0, 0, c, 0.86)}</g>
   <rect x="72" y="164" width="104" height="104" rx="24" fill="url(#accentGrad)" filter="url(#shadow)"/>
   <text x="124" y="226" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="26" font-weight="900" fill="{c['primary']}" text-anchor="middle">KIT</text>
-  <text x="72" y="292" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="800" fill="{c['accent']}" letter-spacing="2.2">{doc_count} DOCUMENTS · PROMPTS · SYSTEMS · CHECKLISTS</text>
   {_text_lines(name_lines, 72, name_y, 54, 900, c["text_light"], 62)}
   <rect x="72" y="{tag_y - 20}" width="112" height="6" rx="3" fill="url(#accentGrad)"/>
   {_text_lines(tag_lines, 72, tag_y, 21, 500, c["text_light"], 32)}
   <g transform="translate(72 {height-402})">
     <rect width="{width-144}" height="86" rx="18" fill="{c['cream']}" opacity="0.97"/>
     <text x="26" y="33" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11" font-weight="900" fill="{c['primary_2']}" letter-spacing="1.5">POSITIONING</text>
-    <text x="26" y="62" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="750" fill="{c['ink']}">A practical AI operating system for real estate agents.</text>
+    <text x="26" y="62" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="730" fill="{c['ink']}">AI workflows for faster listings, follow-up, and client communication.</text>
   </g>
-  {doc_badges}
+  <g opacity="0.32">{doc_badges}</g>
   <rect x="0" y="{height-70}" width="{width}" height="70" fill="#050b14" opacity="0.72"/>
   <text x="72" y="{height-31}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11" font-weight="900" fill="{c['accent']}" letter-spacing="3">HYDRA</text>
   <text x="{width-72}" y="{height-31}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="10" font-weight="700" fill="rgba(255,255,255,0.48)" text-anchor="end">READY FOR GUMROAD · FIVERR · PAYHIP</text>
@@ -797,6 +825,114 @@ def generate_marketplace_cover_svg(kind: str, kit_name: str, kit_tagline: str, t
 </svg>"""
 
 
+def generate_refined_gumroad_cover_svg(style: str, theme: str = "navy_gold") -> str:
+    """Generate calmer Gumroad cover compositions for premium listing tests."""
+    c = KIT_COLORS.get(theme, KIT_COLORS["navy_gold"])
+    spec = REFINED_COMPOSITIONS[style]
+    width, height = 1600, 900
+    margin = 104
+    title_x = 132
+    title_y = 274
+    title_width = 610
+    stack_x = 1110
+    stack_y = 204
+    panel_y = 658
+    title_lines = _wrap_text_svg(spec["headline"], 18)
+    sub_lines = _wrap_text_svg(spec["subheadline"], 40)
+    title_rect = Rect("refined_title", title_x, title_y - 60, title_width, len(title_lines) * 66 + 18, "text_zone")
+    stack_rect = Rect("refined_document_stack", stack_x, stack_y, 252, 308, "visual_zone")
+    panel_rect = Rect("refined_positioning_panel", title_x, panel_y, 700, 116, "bottom_panel")
+    text_checks = []
+    text_checks.extend(_text_width_checks("refined_title", title_lines, title_rect, 56, 900))
+    text_checks.extend(_text_width_checks("refined_subtitle", sub_lines, Rect("refined_subtitle", title_x, 438, title_width, 78), 23, 560))
+    text_checks.extend(_text_width_checks("refined_positioning", [spec["positioning"]], panel_rect, 17, 700, padding=34))
+    status = "PASS" if all(check["status"] == "PASS" for check in text_checks) else "FAIL"
+    if not all(item.inside(width, height) for item in (title_rect, stack_rect, panel_rect)):
+        status = "FAIL"
+    if title_rect.intersects(stack_rect, 96):
+        status = "FAIL"
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<!-- HYDRA_LAYOUT_SAFETY: {status}; HYDRA_COMPOSITION_REFINED: {style}; theme={theme} -->
+{_premium_background(width, height, c)}
+  <rect x="{margin}" y="{margin}" width="{width - 2 * margin}" height="{height - 2 * margin}" rx="34" fill="#ffffff" opacity="0.052" stroke="#ffffff" stroke-opacity="0.12"/>
+  <text x="{title_x}" y="164" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="850" fill="{c['accent']}" letter-spacing="2.2">PREMIUM BUSINESS KIT</text>
+  <g>
+    {_text_lines(title_lines, title_x, title_y, 56, 900, c["text_light"], 72)}
+    <rect x="{title_x}" y="416" width="94" height="5" rx="3" fill="url(#accentGrad)" opacity="0.82"/>
+    {_text_lines(sub_lines, title_x, 462, 23, 560, c["text_light"], 34)}
+  </g>
+  <g transform="translate({stack_x} {stack_y}) rotate(-5)" opacity="{spec['stack_opacity']}">
+    {_mini_stack(0, 0, c, 0.82)}
+  </g>
+  <g opacity="0.18">
+    <rect x="1016" y="598" width="250" height="34" rx="17" fill="#ffffff"/>
+    <rect x="1288" y="598" width="124" height="34" rx="17" fill="#ffffff"/>
+    <text x="1042" y="620" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="10" font-weight="850" fill="{c['text_light']}" letter-spacing="1.6">{_esc(spec['module_label'].upper())}</text>
+  </g>
+  <g transform="translate({panel_rect.x} {panel_rect.y})">
+    <rect width="{panel_rect.width}" height="{panel_rect.height}" rx="22" fill="{c['cream']}" opacity="{spec['panel_opacity']}" filter="url(#shadow)"/>
+    <text x="34" y="38" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11" font-weight="850" fill="{c['primary_2']}" letter-spacing="1.5">POSITIONING</text>
+    <text x="34" y="75" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="700" fill="{c['ink']}">{_esc(spec['positioning'])}</text>
+  </g>
+  <text x="{title_x}" y="{height - 70}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11" font-weight="900" fill="{c['accent']}" letter-spacing="3">HYDRA</text>
+  <text x="{width - margin}" y="{height - 70}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11" font-weight="700" fill="{c['text_light']}" opacity="0.46" text-anchor="end">GUMROAD · FIVERR · PAYHIP</text>
+</svg>"""
+
+
+def build_refined_marketplace_variants(visuals_dir: str | Path) -> dict[str, str]:
+    refined_dir = Path(visuals_dir) / "refined"
+    refined_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, str] = {}
+    for style in REFINED_COMPOSITIONS:
+        style_dir = refined_dir / style
+        style_dir.mkdir(parents=True, exist_ok=True)
+        cover_path = style_dir / "gumroad_cover.svg"
+        cover_path.write_text(generate_refined_gumroad_cover_svg(style), encoding="utf-8")
+        paths[f"refined/{style}/gumroad_cover.svg"] = str(cover_path)
+    index_path = refined_dir / "index.html"
+    index_path.write_text(_refined_index_html(), encoding="utf-8")
+    paths["refined/index.html"] = str(index_path)
+    return paths
+
+
+def _refined_index_html() -> str:
+    cards = "\n".join(
+        f"""
+        <section>
+          <h2>{_esc(spec['name'])}</h2>
+          <p>{_esc(spec['subheadline'])}</p>
+          <img src="{key}/gumroad_cover.svg" alt="{_esc(spec['name'])} Gumroad cover">
+        </section>
+        """
+        for key, spec in REFINED_COMPOSITIONS.items()
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Product 43 Refined Covers</title>
+<style>
+body {{ margin:0; font-family:Inter,Segoe UI,Arial,sans-serif; background:#f6f7fb; color:#111827; }}
+main {{ width:min(1120px, calc(100% - 40px)); margin:34px auto 70px; }}
+h1 {{ margin:0 0 8px; font-size:34px; }}
+p {{ color:#526071; }}
+section {{ background:#fff; border:1px solid #dfe5ef; border-radius:12px; padding:18px; margin:22px 0; box-shadow:0 10px 26px rgba(15,23,42,.06); }}
+h2 {{ margin:0 0 4px; font-size:22px; }}
+img {{ width:100%; display:block; margin-top:14px; border:1px solid #e5e7eb; border-radius:10px; }}
+</style>
+</head>
+<body>
+<main>
+  <h1>Product 43 Refined Gumroad Covers</h1>
+  <p>Composition variants focused on calmer premium SaaS/course presentation.</p>
+  {cards}
+</main>
+</body>
+</html>"""
+
+
 def build_marketplace_visuals(product_dir: str | Path, kit_name: str, kit_tagline: str, theme: str = "navy_gold") -> dict[str, str]:
     visuals_dir = Path(product_dir) / "marketplace_visuals"
     visuals_dir.mkdir(parents=True, exist_ok=True)
@@ -806,6 +942,7 @@ def build_marketplace_visuals(product_dir: str | Path, kit_name: str, kit_taglin
         path.write_text(generate_marketplace_cover_svg(kind, kit_name, kit_tagline, theme), encoding="utf-8")
         paths[filename] = str(path)
     paths.update(build_palette_variants(visuals_dir, kit_name, kit_tagline))
+    paths.update(build_refined_marketplace_variants(visuals_dir))
     report = build_layout_safety_report(Path(product_dir))
     paths["quality/layout_safety_report.json"] = str(Path(product_dir) / "quality" / "layout_safety_report.json")
     paths["quality/layout_safety_report.md"] = str(Path(product_dir) / "quality" / "layout_safety_report.md")

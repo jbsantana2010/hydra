@@ -111,6 +111,31 @@ Entry format:
   - updated AESTHETICA latest review
 - Verification: see `runbooks/verification_results.md`.
 
+---
+
+## 2026-05-12T00:00:00Z - Sprint 2.8.2 Marketplace Composition Simplification
+
+- Summary: Added calmer refined Gumroad cover variants and AESTHETICA composition simplicity scoring.
+- Scope: deterministic SVG composition simplification only; no image generation, marketplace APIs, new agents, or Hermes runtime.
+- Outputs:
+  - `products/product_43/marketplace_visuals/refined/`
+  - updated `products/product_43/quality/visual_commercial_review.md`
+  - updated AESTHETICA latest review with composition fields
+- Verification: see `runbooks/verification_results.md`.
+
+---
+
+## 2026-05-12T00:00:00Z - Sprint 2.9 Production Marketplace Exports
+
+- Summary: Added deterministic CairoSVG PNG export pipeline and curated Product 43 final marketplace assets.
+- Scope: final asset export and organization only; no visual redesign, marketplace APIs, screenshots, or browser automation.
+- Outputs:
+  - `products/product_43/final_assets/gumroad/*.png`
+  - `products/product_43/final_assets/fiverr/*.png`
+  - `products/product_43/final_assets/ASSET_MANIFEST.md`
+  - `products/product_43/archive/marketplace_visuals_obsolete/variants/`
+- Verification: see `runbooks/verification_results.md`.
+
 ## 2026-05-10 - Sprint 2.2 Integration
 
 - Executor: Codex

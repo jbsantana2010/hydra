@@ -282,6 +282,28 @@ bash scripts/verify_sprint28.sh
 bash scripts/verify_sprint26.sh
 ```
 
+## Sprint 2.8.2
+
+```bash
+cd /home/jb/dev/hydra
+python3 -m py_compile app/kit_covers.py app/aesthetica.py
+python3 scripts/build_product43_kit.py --covers-only
+chmod +x scripts/verify_sprint282.sh
+bash scripts/verify_sprint282.sh
+bash scripts/verify_sprint281.sh
+```
+
+## Sprint 2.9
+
+```bash
+cd /home/jb/dev/hydra
+python3 -m pip install --user --break-system-packages cairosvg==2.7.1
+PYTHONPATH=app python3 -m marketplace_export
+chmod +x scripts/verify_sprint29.sh
+bash scripts/verify_sprint29.sh
+bash scripts/verify_sprint282.sh
+```
+
 ## Sprint 2.8
 
 ```bash

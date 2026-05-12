@@ -265,3 +265,25 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | `bash scripts/verify_sprint26.sh` | PASS |
 | Text overflow checks | PASS — no buyer outcome overflow |
 | Product 43 layout consistency | PASS — Gumroad, Fiverr, and Payhip/Sellfy use the same shortened buyer outcome and layout safety standard |
+
+---
+
+## Sprint 2.8.2 — 2026-05-12
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint282.sh` | PASS |
+| `bash scripts/verify_sprint281.sh` | PASS |
+| Refined Gumroad variants | PASS — 3 composition variants |
+| AESTHETICA composition | PASS — `composition_score=91`, `composition_overcrowded=false` |
+
+---
+
+## Sprint 2.9 — 2026-05-12
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint29.sh` | PASS |
+| `bash scripts/verify_sprint282.sh` | PASS |
+| Final PNG exports | PASS — Gumroad/Fiverr PNGs generated with correct dimensions |
+| Product folder curation | PASS — obsolete palette variants archived |
