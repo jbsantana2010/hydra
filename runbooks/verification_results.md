@@ -228,3 +228,28 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | Variant index | PASS — `products/product_43/marketplace_visuals/variants/index.html` |
 | Export notes | PASS — recommends Navy Gold and gives manual export commands |
 | Fiverr dimensions | PASS — all variant Fiverr SVGs are 1280x769 with matching viewBox |
+
+---
+
+## Sprint 2.6 — 2026-05-11
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint26.sh` | PASS |
+| `LIVE=1 bash scripts/verify_sprint26.sh` | PASS |
+| `bash scripts/verify_sprint25.sh` | PASS — 70/70 |
+| AESTHETICA output | PASS — `quality/aesthetica_review.json`, `quality/aesthetica_review.md`, `agent_reviews/aesthetica/latest.json` |
+| Product 43 recommendation | PASS — Navy Gold for Gumroad and Fiverr, 90.8/100 overall |
+
+---
+
+## Sprint 2.8 — 2026-05-11
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint28.sh` | PASS |
+| `LIVE=1 bash scripts/verify_sprint28.sh` | PASS |
+| `bash scripts/verify_sprint26.sh` | PASS |
+| `bash scripts/verify_sprint25.sh` | PASS — 70/70 |
+| Product 43 layout safety | PASS — 31 assets checked, 0 failures |
+| Navy Gold selected assets | PASS — 5 variant assets, all PASS |

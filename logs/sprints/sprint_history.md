@@ -72,6 +72,32 @@ Entry format:
 - Next:
   - Follow `runbooks/ROADMAP.md` immediate next sprint recommendation unless operator overrides.
 
+---
+
+## 2026-05-11T00:00:00Z - Sprint 2.6 AESTHETICA Foundation
+
+- Summary: Added HYDRA's first specialized agent standard, AESTHETICA, plus a Hermes-ready local output contract.
+- Scope: deterministic marketplace visual scoring only; no Hermes runtime, no image generation, no publishing automation.
+- Outputs:
+  - `agents/AESTHETICA.md`
+  - `agents/HERMES_FOUNDATION.md`
+  - `products/product_43/quality/aesthetica_review.json`
+  - `products/product_43/quality/aesthetica_review.md`
+  - `products/product_43/agent_reviews/aesthetica/latest.json`
+- Verification: see `runbooks/verification_results.md`.
+
+---
+
+## 2026-05-11T00:00:00Z - Sprint 2.8 Visual Layout Safety Engine
+
+- Summary: Added deterministic layout validation for Product 43 marketplace SVG assets and regenerated all main/variant visuals with safer composition zones.
+- Scope: local SVG layout safety only; no image generation, no marketplace publishing, no Hermes runtime.
+- Outputs:
+  - `products/product_43/quality/layout_safety_report.json`
+  - `products/product_43/quality/layout_safety_report.md`
+  - regenerated `products/product_43/marketplace_visuals/`
+- Verification: see `runbooks/verification_results.md`.
+
 ## 2026-05-10 - Sprint 2.2 Integration
 
 - Executor: Codex

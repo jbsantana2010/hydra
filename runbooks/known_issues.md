@@ -12,6 +12,9 @@ Severities: `low` / `medium` / `high`.
 ---
 
 - 2026-05-11 [sprint 2.5] **low** — Palette variant assets are SVG-only and still need manual PNG/JPG export for marketplace upload. Mitigation: `marketplace_visuals/variants/export_notes.md` documents export targets and suggested commands.
+- 2026-05-11 [sprint 2.6] **low** — AESTHETICA is deterministic and does not perform pixel-level rendering or screenshot comparison. Mitigation: it catches structural marketplace-readiness issues and writes human/Hermes-readable review files; final operator visual inspection remains required.
+- 2026-05-11 [sprint 2.6] **low** — Hermes foundation files are standards and JSON contracts only; no Hermes runtime is installed. Mitigation: intentional for Sprint 2.6 to avoid autonomous behavior.
+- 2026-05-11 [sprint 2.8] **low** — Layout safety is geometry-based from HYDRA's declared SVG zones, not a rendered pixel/screenshot comparison. Mitigation: deterministic checks now prevent known title/subtitle/module/footer collisions; operator still performs final visual inspection.
 - 2026-05-11 [sprint 2.5] **low** — Visual variant selection is still a human decision; no automated conversion-score prediction. Mitigation: `variants/index.html` makes side-by-side operator review fast.
 - 2026-05-11 [sprint 2.4] **low** — Marketplace visual assets are SVG source files, not exported PNG/JPG uploads. Mitigation: acceptable for deterministic Sprint 2.4; export manually for first listing or add a lightweight export step later.
 - 2026-05-11 [sprint 2.4] **low** — Visual upgrade improves perceived value but still requires operator review before publishing at $97. Mitigation: `products/product_43/quality/visual_commercial_review.md` records first-listing readiness and remaining gaps.

@@ -1,0 +1,30 @@
+{
+  "version": "0.1",
+  "agents": [
+    {
+      "id": "aesthetica",
+      "name": "AESTHETICA",
+      "type": "deterministic_design_critic",
+      "status": "active",
+      "spec": "agents/AESTHETICA.md",
+      "entrypoint": "app.aesthetica.run_aesthetica_review",
+      "outputs": [
+        "products/product_<id>/quality/aesthetica_review.json",
+        "products/product_<id>/quality/aesthetica_review.md",
+        "products/product_<id>/agent_reviews/aesthetica/latest.json"
+      ],
+      "may": [
+        "score marketplace visuals",
+        "recommend visual variants",
+        "write critique artifacts"
+      ],
+      "must_not": [
+        "publish listings",
+        "spend money",
+        "hold credentials",
+        "modify revenue",
+        "make final approval decisions"
+      ]
+    }
+  ]
+}

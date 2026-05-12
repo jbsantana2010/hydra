@@ -85,6 +85,48 @@
     <a class="button" href="/kits/{{ product.id }}">Open Kit Builder</a>
   </section>
 
+  <h3>AESTHETICA Visual Review</h3>
+  <section class="panel">
+    <p class="muted">
+      Runs the deterministic AESTHETICA design critic over marketplace visual variants and writes Hermes-ready agent output.
+    </p>
+    <form method="post" action="/products/{{ product.id }}/aesthetica-review" style="margin:10px 0;">
+      <button type="submit">Run AESTHETICA Review</button>
+    </form>
+    {% if aesthetica_review %}
+      <p>
+        <strong>Overall score:</strong> {{ aesthetica_review.overall_score }}/100
+        · <strong>Status:</strong>
+        <span class="badge {% if aesthetica_review.launch_ready %}good{% else %}warn{% endif %}">
+          {{ "launch ready" if aesthetica_review.launch_ready else "needs fixes" }}
+        </span>
+      </p>
+      <ul>
+        {% if aesthetica_review.best_gumroad_theme %}
+          <li><strong>Best Gumroad theme:</strong> {{ aesthetica_review.best_gumroad_theme.theme_name }} ({{ aesthetica_review.best_gumroad_theme.score }}/100)</li>
+        {% endif %}
+        {% if aesthetica_review.best_fiverr_theme %}
+          <li><strong>Best Fiverr theme:</strong> {{ aesthetica_review.best_fiverr_theme.theme_name }} ({{ aesthetica_review.best_fiverr_theme.score }}/100)</li>
+        {% endif %}
+        <li><strong>Strongest headline:</strong> {{ aesthetica_review.strongest_headline }}</li>
+        <li><strong>Weakest layout issue:</strong> {{ aesthetica_review.weakest_layout_issue }}</li>
+      </ul>
+      {% if aesthetica_review.required_fixes_before_launch %}
+        <p><strong>Required fixes:</strong></p>
+        <ul>
+          {% for fix in aesthetica_review.required_fixes_before_launch[:4] %}
+            <li>{{ fix }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <p class="muted">
+        Hermes-ready output: <code>{{ aesthetica_review.output_paths.hermes_latest }}</code>
+      </p>
+    {% else %}
+      <p class="muted">No AESTHETICA review yet. Generate marketplace variants, then run the review.</p>
+    {% endif %}
+  </section>
+
   <h3>Package Quality / Upload Readiness</h3>
   <section class="panel">
     <p class="muted">

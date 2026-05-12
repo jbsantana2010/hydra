@@ -258,6 +258,33 @@ ls -lh products/product_43/marketplace_visuals/variants/index.html \
   products/product_43/marketplace_visuals/variants/export_notes.md
 ```
 
+## Sprint 2.6
+
+```bash
+cd /home/jb/dev/hydra
+python3 -m py_compile app/aesthetica.py app/main.py
+chmod +x scripts/verify_sprint26.sh
+bash scripts/verify_sprint26.sh
+docker compose up -d --build hydra-console
+LIVE=1 bash scripts/verify_sprint26.sh
+bash scripts/verify_sprint25.sh
+```
+
+## Sprint 2.8
+
+```bash
+cd /home/jb/dev/hydra
+python3 -m py_compile app/kit_covers.py app/aesthetica.py
+wsl -d Ubuntu -u root -- bash -lc 'chown -R jb:jb /home/jb/dev/hydra/products/product_43'
+python3 scripts/build_product43_kit.py --covers-only
+chmod +x scripts/verify_sprint28.sh
+bash scripts/verify_sprint28.sh
+docker compose up -d --build hydra-console
+LIVE=1 bash scripts/verify_sprint28.sh
+bash scripts/verify_sprint26.sh
+bash scripts/verify_sprint25.sh
+```
+
 
 ## Sprint 1.3
 

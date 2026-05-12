@@ -1254,6 +1254,47 @@ for marketplace assets.
 Use AESTHETICA's recommended theme, export marketplace-ready PNG/JPG assets
 manually, and create the first real Gumroad/Fiverr listing test.
 
+## Sprint 2.8 — Visual Layout Safety Engine + Marketplace Creative Fixes
+
+### Objective
+
+Stop HYDRA from producing broken-looking marketplace visuals by adding
+deterministic SVG layout safety checks and regenerating Product 43 assets with
+clean safe zones.
+
+### Scope
+
+- Add bounding boxes, overlap detection, canvas bounds checks, and minimum gap
+  validation for marketplace SVG layouts.
+- Refactor Product 43 marketplace layouts around explicit constants instead of
+  scattered coordinates.
+- Regenerate main marketplace visuals and all five palette variant folders.
+- Write `layout_safety_report.json` and `layout_safety_report.md`.
+- Extend AESTHETICA so layout safety failure blocks launch readiness.
+- Show layout safety status in the variant index.
+
+### Out of Scope
+
+- image generation APIs
+- marketplace publishing
+- scraping/browser automation
+- Celery/schedulers
+- Hermes runtime
+- new product categories
+
+### Acceptance Criteria
+
+- Navy Gold selected assets pass layout safety.
+- Product 43 marketplace visuals have no deterministic collision findings.
+- AESTHETICA includes layout safety fields and does not mark launch-ready if
+  layout safety fails.
+- Sprint 2.6 and Sprint 2.5 regression verification still pass.
+
+### Launch Milestone
+
+Use the layout-safe Navy Gold assets as the selected first-listing creative
+direction, then export raster images for Gumroad and Fiverr.
+
 ---
 
 ## Sprint 2.7 — LAUNCH: Export + Webhook + ATLAS

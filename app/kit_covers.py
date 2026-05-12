@@ -8,6 +8,9 @@ palette variants. No image APIs. No browser automation.
 from __future__ import annotations
 
 import html
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -146,6 +149,63 @@ MARKETPLACE_FILES = {
     "mockup": "product_mockup.svg",
     "payhip_sellfy": "payhip_sellfy_cover.svg",
 }
+MARKETPLACE_KIND_BY_FILE = {filename: kind for kind, filename in MARKETPLACE_FILES.items()}
+
+
+@dataclass(frozen=True)
+class Rect:
+    name: str
+    x: int
+    y: int
+    width: int
+    height: int
+    kind: str = "element"
+
+    @property
+    def right(self) -> int:
+        return self.x + self.width
+
+    @property
+    def bottom(self) -> int:
+        return self.y + self.height
+
+    def intersects(self, other: "Rect", gap: int = 0) -> bool:
+        return not (
+            self.right + gap <= other.x
+            or other.right + gap <= self.x
+            or self.bottom + gap <= other.y
+            or other.bottom + gap <= self.y
+        )
+
+    def inside(self, width: int, height: int, margin: int = 0) -> bool:
+        return (
+            self.x >= margin
+            and self.y >= margin
+            and self.right <= width - margin
+            and self.bottom <= height - margin
+        )
+
+    def as_dict(self) -> dict[str, int | str]:
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+            "right": self.right,
+            "bottom": self.bottom,
+        }
+
+
+def _gap_between(a: Rect, b: Rect) -> int:
+    if a.intersects(b):
+        return 0
+    horizontal = max(b.x - a.right, a.x - b.right, 0)
+    vertical = max(b.y - a.bottom, a.y - b.bottom, 0)
+    if horizontal and vertical:
+        return min(horizontal, vertical)
+    return horizontal or vertical
 
 
 def _esc(value: str) -> str:
@@ -311,16 +371,37 @@ def generate_master_cover_svg(
 
 def _marketplace_layout(width: int, height: int) -> dict[str, int]:
     scale = width / 1280
+    safe_margin = int(76 * scale)
+    left_column_width = int(560 * scale)
+    right_visual_x = int(720 * scale)
+    card_width = int(220 * scale)
+    card_height = int(82 * scale)
+    gutter_x = int(30 * scale)
+    gutter_y = int(16 * scale)
     return {
-        "margin": int(76 * scale),
-        "title_box_width": int(560 * scale),
-        "module_grid_x": int(720 * scale),
-        "module_grid_y": int(132 * scale),
-        "card_width": int(220 * scale),
-        "card_height": int(102 * scale),
-        "gutter_x": int(28 * scale),
-        "gutter_y": int(24 * scale),
-        "safe_bottom_y": int((height - 137) * scale if width == 1280 else height - 150),
+        "canvas_width": width,
+        "canvas_height": height,
+        "safe_margin": safe_margin,
+        "margin": safe_margin,
+        "left_column_width": left_column_width,
+        "title_box_width": left_column_width,
+        "right_visual_x": right_visual_x,
+        "module_grid_x": right_visual_x,
+        "card_grid_x": right_visual_x,
+        "card_grid_y": int(126 * scale),
+        "module_grid_y": int(126 * scale),
+        "card_width": card_width,
+        "card_height": card_height,
+        "gutter_x": gutter_x,
+        "gutter_y": gutter_y,
+        "title_y": int(214 * scale) if width == 1280 else int(242 * scale),
+        "subtitle_y": 0,
+        "bottom_panel_y": height - safe_margin - int(112 * scale),
+        "safe_bottom_y": height - safe_margin - int(112 * scale),
+        "bottom_chip_y": height - safe_margin - int(44 * scale),
+        "major_zone_gap": int(40 * scale),
+        "text_block_gap": int(32 * scale),
+        "scale": scale,
     }
 
 
@@ -330,21 +411,263 @@ def _cards_grid(layout: dict[str, int], c: dict) -> str:
         col = i % 2
         row = i // 2
         x = layout["module_grid_x"] + col * (layout["card_width"] + layout["gutter_x"])
-        y = layout["module_grid_y"] + row * (layout["card_height"] + layout["gutter_y"])
+        y = layout["card_grid_y"] + row * (layout["card_height"] + layout["gutter_y"])
         cards.append(
             f'<rect x="{x}" y="{y}" width="{layout["card_width"]}" height="{layout["card_height"]}" rx="18" fill="{c["paper"]}" opacity="0.96" filter="url(#shadow)"/>'
             f'<rect x="{x}" y="{y}" width="{layout["card_width"]}" height="12" rx="6" fill="{c["accent"]}"/>'
-            f'<text x="{x+22}" y="{y+45}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="950" fill="{c["primary_2"]}">{num}</text>'
-            f'<text x="{x+22}" y="{y+72}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="800" fill="{c["ink"]}">{_esc(short)}</text>'
-            f'<text x="{x+22}" y="{y+91}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="9" font-weight="650" fill="#64748b">ready-to-use module</text>'
+            f'<text x="{x+20}" y="{y+36}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="15" font-weight="950" fill="{c["primary_2"]}">{num}</text>'
+            f'<text x="{x+20}" y="{y+58}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="800" fill="{c["ink"]}">{_esc(short)}</text>'
+            f'<text x="{x+20}" y="{y+75}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="9" font-weight="650" fill="#64748b">ready-to-use module</text>'
         )
     return "\n".join(cards)
+
+
+def _marketplace_layout_zones(kind: str, width: int, height: int, title_lines: list[str], sub_lines: list[str]) -> tuple[dict[str, int], dict[str, Rect], list[Rect]]:
+    layout = _marketplace_layout(width, height)
+    scale = layout["scale"]
+    title_size = 54 if width == 1280 else 64
+    title_gap = 60 if width == 1280 else 72
+    sub_size = 21 if width == 1280 else 26
+    sub_gap = 29 if width == 1280 else 34
+    title_y = layout["title_y"]
+    title_height = max(title_size, len(title_lines) * title_gap)
+    subtitle_y = title_y + title_height + layout["text_block_gap"] + int(12 * scale)
+    subtitle_height = max(sub_size, len(sub_lines) * sub_gap)
+    accent_y = subtitle_y - int(38 * scale)
+
+    title = Rect("title_safe_zone", layout["margin"] + int(20 * scale), title_y - title_size, layout["left_column_width"], title_height + int(18 * scale), "text_zone")
+    accent = Rect("accent_line", title.x, accent_y, int(116 * scale), int(7 * scale), "accent")
+    subtitle = Rect("subtitle_safe_zone", title.x, subtitle_y - sub_size, layout["left_column_width"], subtitle_height + int(14 * scale), "text_zone")
+
+    cards = []
+    for i in range(len(DOCUMENTS)):
+        col = i % 2
+        row = i // 2
+        cards.append(
+            Rect(
+                f"module_card_{i+1}",
+                layout["card_grid_x"] + col * (layout["card_width"] + layout["gutter_x"]),
+                layout["card_grid_y"] + row * (layout["card_height"] + layout["gutter_y"]),
+                layout["card_width"],
+                layout["card_height"],
+                "module_card",
+            )
+        )
+
+    card_cluster = Rect(
+        "module_card_cluster",
+        layout["card_grid_x"],
+        layout["card_grid_y"],
+        layout["card_width"] * 2 + layout["gutter_x"],
+        layout["card_height"] * 4 + layout["gutter_y"] * 3,
+        "visual_zone",
+    )
+
+    bottom_panel = Rect("buyer_outcome_panel", title.x, layout["bottom_panel_y"], layout["left_column_width"], int(86 * scale), "bottom_panel")
+    bottom_chip = Rect("hydra_footer_chip", width - layout["margin"] - int(224 * scale), layout["bottom_chip_y"], int(224 * scale), int(36 * scale), "footer_chip")
+
+    zones = {
+        "title": title,
+        "accent": accent,
+        "subtitle": subtitle,
+        "card_cluster": card_cluster,
+        "bottom_panel": bottom_panel,
+        "bottom_chip": bottom_chip,
+    }
+    elements = [title, accent, subtitle, card_cluster, bottom_panel, bottom_chip, *cards]
+    layout.update(
+        {
+            "title_size": title_size,
+            "title_line_gap": title_gap,
+            "subtitle_size": sub_size,
+            "subtitle_line_gap": sub_gap,
+            "subtitle_y": subtitle_y,
+            "accent_y": accent_y,
+            "bottom_panel_y": bottom_panel.y,
+            "bottom_chip_y": bottom_chip.y,
+        }
+    )
+    return layout, zones, elements
+
+
+def validate_marketplace_layout(kind: str, width: int, height: int, elements: list[Rect]) -> dict:
+    issues = {
+        "collisions": [],
+        "bounds_issues": [],
+        "safe_zone_issues": [],
+        "spacing_issues": [],
+    }
+    by_name = {item.name: item for item in elements}
+    major_zone_gap = 40
+    text_block_gap = 32
+
+    for item in elements:
+        if not item.inside(width, height):
+            issues["bounds_issues"].append(f"{item.name} exceeds {width}x{height} viewBox")
+
+    collision_pairs = [
+        ("title_safe_zone", "subtitle_safe_zone", text_block_gap),
+        ("accent_line", "title_safe_zone", 0),
+        ("accent_line", "subtitle_safe_zone", 0),
+        ("module_card_cluster", "title_safe_zone", major_zone_gap),
+        ("module_card_cluster", "subtitle_safe_zone", major_zone_gap),
+        ("buyer_outcome_panel", "subtitle_safe_zone", text_block_gap),
+        ("buyer_outcome_panel", "module_card_cluster", major_zone_gap),
+        ("hydra_footer_chip", "buyer_outcome_panel", major_zone_gap),
+        ("hydra_footer_chip", "module_card_cluster", major_zone_gap),
+    ]
+    for left, right, gap in collision_pairs:
+        a = by_name[left]
+        b = by_name[right]
+        if a.intersects(b, gap):
+            issues["collisions"].append(f"{a.name} is too close to {b.name}; required gap {gap}px")
+
+    cards = [item for item in elements if item.kind == "module_card"]
+    for i, a in enumerate(cards):
+        for b in cards[i + 1 :]:
+            if a.intersects(b, 16):
+                issues["spacing_issues"].append(f"{a.name} is too close to {b.name}")
+
+    title = by_name["title_safe_zone"]
+    card_cluster = by_name["module_card_cluster"]
+    if card_cluster.x < title.right + major_zone_gap:
+        issues["safe_zone_issues"].append("module cards enter title safe zone")
+    if kind == "fiverr_gig_image" and (width, height) != (1280, 769):
+        issues["safe_zone_issues"].append("Fiverr image must be 1280x769")
+    if kind in ("gumroad_cover", "payhip_sellfy") and (width, height) != (1600, 900):
+        issues["safe_zone_issues"].append("Gumroad/Payhip cover must be 1600x900")
+
+    fail_count = sum(len(value) for value in issues.values())
+    return {
+        "asset_type": kind,
+        "canvas": {"width": width, "height": height},
+        "status": "PASS" if fail_count == 0 else "FAIL",
+        "collisions_found": issues["collisions"],
+        "bounds_issues": issues["bounds_issues"],
+        "safe_zone_issues": issues["safe_zone_issues"],
+        "spacing_issues": issues["spacing_issues"],
+        "elements": [item.as_dict() for item in elements],
+    }
+
+
+def layout_safety_for_asset(kind: str, theme: str = "navy_gold") -> dict:
+    width, height = (1600, 900) if kind in ("gumroad_cover", "payhip_sellfy") else (1280, 769)
+    headline, subheadline = HEADLINE_VARIANTS.get(kind, HEADLINE_VARIANTS["gumroad_cover"])
+    title_lines = _wrap_text_svg(headline, 25)
+    sub_lines = _wrap_text_svg(subheadline, 38 if width == 1280 else 44)
+    _layout, _zones, elements = _marketplace_layout_zones(kind, width, height, title_lines, sub_lines)
+    result = validate_marketplace_layout(kind, width, height, elements)
+    result["theme"] = theme
+    result["recommended_fixes"] = _layout_fix_recommendations(result)
+    return result
+
+
+def _layout_fix_recommendations(result: dict) -> list[str]:
+    fixes: list[str] = []
+    if result["collisions_found"]:
+        fixes.append("Increase safe-zone gaps or move the conflicting zone before export.")
+    if result["bounds_issues"]:
+        fixes.append("Move overflowing elements inside the SVG viewBox.")
+    if result["safe_zone_issues"]:
+        fixes.append("Separate text zones from visual modules and enforce platform dimensions.")
+    if result["spacing_issues"]:
+        fixes.append("Increase card gutters and reduce card density.")
+    if not fixes:
+        fixes.append("No deterministic layout fixes required.")
+    return fixes
+
+
+def build_layout_safety_report(product_dir: str | Path) -> dict:
+    product_path = Path(product_dir)
+    visuals_dir = product_path / "marketplace_visuals"
+    quality_dir = product_path / "quality"
+    quality_dir.mkdir(parents=True, exist_ok=True)
+
+    assets: list[dict] = []
+    for kind, filename in MARKETPLACE_FILES.items():
+        path = visuals_dir / filename
+        if path.exists():
+            result = layout_safety_for_asset(kind, "main")
+            result["filename"] = str(path)
+            result["scope"] = "main"
+            assets.append(result)
+
+    variants_dir = visuals_dir / "variants"
+    if variants_dir.exists():
+        for theme_dir in sorted(p for p in variants_dir.iterdir() if p.is_dir()):
+            for kind in ("gumroad_cover", "fiverr_gig_image", "value_stack", "included", "mockup"):
+                filename = MARKETPLACE_FILES[kind]
+                path = theme_dir / filename
+                if path.exists():
+                    result = layout_safety_for_asset(kind, theme_dir.name)
+                    result["filename"] = str(path)
+                    result["scope"] = f"variant:{theme_dir.name}"
+                    assets.append(result)
+
+    fail_count = sum(1 for asset in assets if asset["status"] == "FAIL")
+    report = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "product_dir": str(product_path),
+        "status": "PASS" if fail_count == 0 else "FAIL",
+        "fail_count": fail_count,
+        "asset_count": len(assets),
+        "requirements": {
+            "minimum_primary_text_gap_px": 32,
+            "minimum_major_zone_gap_px": 40,
+            "fiverr_dimensions": "1280x769",
+            "gumroad_dimensions": "1600x900",
+        },
+        "assets": assets,
+    }
+    json_path = quality_dir / "layout_safety_report.json"
+    md_path = quality_dir / "layout_safety_report.md"
+    json_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    md_path.write_text(_layout_safety_markdown(report), encoding="utf-8")
+    return report
+
+
+def _layout_safety_markdown(report: dict) -> str:
+    lines = [
+        "# Layout Safety Report",
+        "",
+        f"Generated: {report['generated_at']}",
+        f"Status: {report['status']}",
+        f"Assets checked: {report['asset_count']}",
+        f"Failures: {report['fail_count']}",
+        "",
+        "## Requirements",
+        "",
+        "- No title/subtitle overlap.",
+        "- No accent line through text.",
+        "- No module cards inside title safe zone.",
+        "- No bottom chip overlap.",
+        "- All elements inside viewBox.",
+        "- Minimum 32px between primary text blocks.",
+        "- Minimum 40px between major composition zones.",
+        "",
+        "## Assets",
+        "",
+    ]
+    for asset in report["assets"]:
+        lines.append(f"### {asset['scope']} — {Path(asset['filename']).name}")
+        lines.append("")
+        lines.append(f"- Status: {asset['status']}")
+        if asset["collisions_found"]:
+            lines.append(f"- Collisions: {'; '.join(asset['collisions_found'])}")
+        if asset["bounds_issues"]:
+            lines.append(f"- Bounds: {'; '.join(asset['bounds_issues'])}")
+        if asset["safe_zone_issues"]:
+            lines.append(f"- Safe zones: {'; '.join(asset['safe_zone_issues'])}")
+        if asset["spacing_issues"]:
+            lines.append(f"- Spacing: {'; '.join(asset['spacing_issues'])}")
+        lines.append(f"- Recommended fixes: {'; '.join(asset['recommended_fixes'])}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def generate_marketplace_cover_svg(kind: str, kit_name: str, kit_tagline: str, theme: str = "navy_gold") -> str:
     c = KIT_COLORS.get(theme, KIT_COLORS["navy_gold"])
     width, height = (1600, 900) if kind in ("gumroad_cover", "payhip_sellfy") else (1280, 769)
-    layout = _marketplace_layout(width, height)
     headline, subheadline = HEADLINE_VARIANTS.get(kind, HEADLINE_VARIANTS["gumroad_cover"])
     eyebrow = {
         "gumroad_cover": "GUMROAD-READY DIGITAL BUSINESS KIT",
@@ -355,36 +678,34 @@ def generate_marketplace_cover_svg(kind: str, kit_name: str, kit_tagline: str, t
         "payhip_sellfy": "PAYHIP / SELLFY COVER",
     }.get(kind, "MARKETPLACE COVER")
     title_lines = _wrap_text_svg(headline, 25)
-    sub_lines = _wrap_text_svg(subheadline, 46)
-    body_y = 220 if height == 769 else 250
-    title_size = 55 if width == 1280 else 66
-    line_gap = 62 if width == 1280 else 74
-    subtitle_y = body_y + len(title_lines) * line_gap + 34
-    callout_y = max(layout["safe_bottom_y"], subtitle_y + len(sub_lines) * 31 + 34)
-    callout_y = min(callout_y, height - 118)
+    sub_lines = _wrap_text_svg(subheadline, 38 if width == 1280 else 44)
+    layout, zones, elements = _marketplace_layout_zones(kind, width, height, title_lines, sub_lines)
+    validation = validate_marketplace_layout(kind, width, height, elements)
+    status = validation["status"]
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<!-- HYDRA_LAYOUT_SAFETY: {status}; kind={kind}; theme={theme} -->
 {_premium_background(width, height, c)}
   <rect x="{layout['margin']}" y="{layout['margin']}" width="{width - 2*layout['margin']}" height="{height - 2*layout['margin']}" rx="30" fill="#ffffff" opacity="0.070" stroke="#ffffff" stroke-opacity="0.15"/>
   <rect x="{layout['margin'] + 20}" y="{layout['margin'] + 22}" width="360" height="38" rx="19" fill="{c['accent']}" opacity="0.20"/>
   <text x="{layout['margin'] + 44}" y="{layout['margin'] + 47}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="900" fill="{c['accent']}" letter-spacing="2.1">{_esc(eyebrow)}</text>
 
   <g>
-    {_text_lines(title_lines, layout["margin"] + 20, body_y, title_size, 920, c["text_light"], line_gap)}
-    <rect x="{layout['margin'] + 20}" y="{subtitle_y - 20}" width="116" height="7" rx="4" fill="url(#accentGrad)"/>
-    {_text_lines(sub_lines, layout["margin"] + 20, subtitle_y, 24 if width == 1280 else 30, 600, c["text_light"], 32 if width == 1280 else 38)}
+    {_text_lines(title_lines, zones["title"].x, layout["title_y"], layout["title_size"], 920, c["text_light"], layout["title_line_gap"])}
+    <rect x="{zones['accent'].x}" y="{zones['accent'].y}" width="{zones['accent'].width}" height="{zones['accent'].height}" rx="4" fill="url(#accentGrad)"/>
+    {_text_lines(sub_lines, zones["subtitle"].x, layout["subtitle_y"], layout["subtitle_size"], 600, c["text_light"], layout["subtitle_line_gap"])}
   </g>
 
   <g>{_cards_grid(layout, c)}</g>
 
-  <g transform="translate({layout['margin'] + 20} {callout_y})">
+  <g transform="translate({zones['bottom_panel'].x} {zones['bottom_panel'].y})">
     <rect width="{layout['title_box_width']}" height="84" rx="18" fill="{c['cream']}" opacity="0.98" filter="url(#shadow)"/>
     <text x="28" y="31" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="900" fill="{c['primary_2']}" letter-spacing="1.4">BUYER OUTCOME</text>
     <text x="28" y="59" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="800" fill="{c['ink']}">Save time on listings, follow-up, client communication, content, and reviews.</text>
   </g>
 
-  <rect x="{width - layout['margin'] - 224}" y="{height - layout['margin'] - 50}" width="224" height="36" rx="18" fill="{c['panel']}" opacity="0.72"/>
-  <text x="{width - layout['margin'] - 112}" y="{height - layout['margin'] - 27}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11" font-weight="900" fill="{c['accent']}" text-anchor="middle" letter-spacing="2.4">HYDRA</text>
+  <rect x="{zones['bottom_chip'].x}" y="{zones['bottom_chip'].y}" width="{zones['bottom_chip'].width}" height="{zones['bottom_chip'].height}" rx="18" fill="{c['panel']}" opacity="0.72"/>
+  <text x="{zones['bottom_chip'].x + zones['bottom_chip'].width // 2}" y="{zones['bottom_chip'].y + 23}" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11" font-weight="900" fill="{c['accent']}" text-anchor="middle" letter-spacing="2.4">HYDRA</text>
 </svg>"""
 
 
@@ -397,6 +718,9 @@ def build_marketplace_visuals(product_dir: str | Path, kit_name: str, kit_taglin
         path.write_text(generate_marketplace_cover_svg(kind, kit_name, kit_tagline, theme), encoding="utf-8")
         paths[filename] = str(path)
     paths.update(build_palette_variants(visuals_dir, kit_name, kit_tagline))
+    report = build_layout_safety_report(Path(product_dir))
+    paths["quality/layout_safety_report.json"] = str(Path(product_dir) / "quality" / "layout_safety_report.json")
+    paths["quality/layout_safety_report.md"] = str(Path(product_dir) / "quality" / "layout_safety_report.md")
     return paths
 
 
@@ -413,7 +737,7 @@ def build_palette_variants(visuals_dir: str | Path, kit_name: str, kit_tagline: 
             path.write_text(generate_marketplace_cover_svg(kind, kit_name, kit_tagline, theme_key), encoding="utf-8")
             paths[f"variants/{theme_key}/{filename}"] = str(path)
     index_path = variants_dir / "index.html"
-    index_path.write_text(_variant_index_html(), encoding="utf-8")
+    index_path.write_text(_variant_index_html(_variant_layout_statuses()), encoding="utf-8")
     paths["variants/index.html"] = str(index_path)
     notes_path = variants_dir / "export_notes.md"
     notes_path.write_text(_export_notes_markdown(), encoding="utf-8")
@@ -421,7 +745,19 @@ def build_palette_variants(visuals_dir: str | Path, kit_name: str, kit_tagline: 
     return paths
 
 
-def _variant_index_html() -> str:
+def _variant_layout_statuses() -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for theme_key in PALETTES:
+        checks = [
+            layout_safety_for_asset(kind, theme_key)["status"]
+            for kind in ("gumroad_cover", "fiverr_gig_image", "value_stack", "included", "mockup")
+        ]
+        statuses[theme_key] = "PASS" if all(status == "PASS" for status in checks) else "FAIL"
+    return statuses
+
+
+def _variant_index_html(layout_statuses: dict[str, str] | None = None) -> str:
+    layout_statuses = layout_statuses or _variant_layout_statuses()
     swatches = {
         key: "".join(f'<span class="swatch" style="background:{palette[name]}"></span>' for name in ("primary", "accent", "cream"))
         for key, palette in PALETTES.items()
@@ -434,7 +770,10 @@ def _variant_index_html() -> str:
               <h2>{_esc(palette['name'])}</h2>
               <p>{_esc(palette['use_case'])}</p>
             </div>
-            <div class="swatches">{swatches[key]}</div>
+            <div class="meta">
+              <span class="status {layout_statuses.get(key, 'WARNING').lower()}">Layout {layout_statuses.get(key, 'WARNING')}</span>
+              <div class="swatches">{swatches[key]}</div>
+            </div>
           </div>
           <div class="preview-grid">
             <div><h3>Gumroad</h3><img src="{key}/gumroad_cover.svg" alt="{_esc(palette['name'])} Gumroad cover"></div>
@@ -457,6 +796,11 @@ h1 {{ margin:0 0 8px; font-size:34px; }}
 .intro {{ color:#526071; margin-bottom:26px; }}
 .theme-card {{ background:#fff; border:1px solid #dfe5ef; border-radius:12px; padding:18px; margin-bottom:24px; box-shadow:0 10px 28px rgba(15,23,42,.06); }}
 .theme-head {{ display:flex; justify-content:space-between; gap:20px; align-items:flex-start; margin-bottom:16px; }}
+.meta {{ display:flex; align-items:center; gap:14px; }}
+.status {{ display:inline-flex; align-items:center; height:28px; padding:0 11px; border-radius:999px; font-size:11px; font-weight:900; letter-spacing:.08em; }}
+.status.pass {{ color:#065f46; background:#d1fae5; }}
+.status.warning {{ color:#92400e; background:#fef3c7; }}
+.status.fail {{ color:#991b1b; background:#fee2e2; }}
 h2 {{ margin:0 0 4px; font-size:22px; }}
 h3 {{ margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.12em; color:#64748b; }}
 p {{ margin:0; color:#526071; }}
