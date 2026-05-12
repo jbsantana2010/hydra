@@ -6,6 +6,8 @@ from contextlib import contextmanager
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from sqlalchemy import (
+    Boolean,
+    String,
     Column,
     DateTime,
     ForeignKey,
@@ -15,6 +17,7 @@ from sqlalchemy import (
     create_engine,
     func,
 )
+import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = os.getenv(
@@ -232,6 +235,60 @@ class MarketPattern(Base):
         nullable=True,
     )
     created_at = Column(DateTime, server_default=func.now())
+
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2.7 — ATLAS v0.1: product lifecycle + revenue tracking
+# ---------------------------------------------------------------------------
+
+class ProductLifecycle(Base):
+    """Tracks each product through the pipeline.
+
+    States: draft → ready → approved → listed → live → paused → archived
+    ATLAS v0.1: this table IS Hermes v0.1 state machine.
+    """
+    __tablename__ = "product_lifecycle"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, nullable=False, unique=True, index=True)
+    product_name = Column(String(255), nullable=True)
+    state = Column(
+        sa.Enum('draft','ready','approved','listed','live','paused','archived',
+                name='lifecycle_state', create_type=False),
+        nullable=False, default='draft', index=True)
+    gumroad_url = Column(String(500), nullable=True)
+    fiverr_url = Column(String(500), nullable=True)
+    gumroad_plr_url = Column(String(500), nullable=True)
+    first_sale_at = Column(DateTime(timezone=True), nullable=True)
+    total_revenue_usd = Column(Numeric(10, 2), nullable=False, default=0)
+    sale_count = Column(Integer, nullable=False, default=0)
+    refund_count = Column(Integer, nullable=False, default=0)
+    operator_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class Sale(Base):
+    """One row per revenue event — Gumroad webhook or manual entry.
+
+    Minimum viable telemetry: know what sold, when, for how much, from where.
+    buyer_email_hash is sha256(lower(email)) — never store raw buyer email.
+    """
+    __tablename__ = "sales"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, nullable=False, index=True)
+    platform = Column(
+        sa.Enum('gumroad','fiverr','payhip','plr_marketplace','other',
+                name='sale_platform', create_type=False),
+        nullable=False, index=True)
+    amount_usd = Column(Numeric(10, 2), nullable=False)
+    buyer_email_hash = Column(String(64), nullable=True)
+    is_refund = Column(Boolean, nullable=False, default=False)
+    refund_reason = Column(Text, nullable=True)
+    sale_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    raw_payload = Column(Text, nullable=True)
 
 
 def init_db() -> None:

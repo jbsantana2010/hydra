@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, func, select
 
+from aesthetica import run_aesthetica_review
 from db import (
     Approval,
     Listing,
@@ -42,6 +43,7 @@ from db import (
 )
 from llm import LlmBlocked, LlmFailed, call_llm_json, get_today_llm_spend
 from kit_routes import kit_router
+from webhooks import router as webhook_router
 from ruflo_bridge import build_ruflo_listing_prompt, build_ruflo_product_prompt
 from signal_engine import calculate_score, mock_candidates
 
@@ -50,6 +52,7 @@ PRODUCT_ROOT = Path(os.getenv("HYDRA_PRODUCT_ROOT", "products"))
 
 app = FastAPI(title="HYDRA Console", version="0.1.0")
 app.include_router(kit_router)
+app.include_router(webhook_router)
 templates = Jinja2Templates(directory="templates")
 
 
@@ -70,7 +73,7 @@ ARTIFACT_TYPES = ["outline", "product_content", "listing_copy", "qa_review", "di
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
-    if request.url.path == "/health":
+    if request.url.path == "/health" or request.url.path.startswith("/webhooks"):
         return await call_next(request)
 
     expected_user = os.getenv("HYDRA_BASIC_USER", "admin")
@@ -233,6 +236,7 @@ def edit_product(
             .order_by(desc(ProductFile.created_at))
         ).all()
         readiness_report = _load_readiness_report(product_id)
+        aesthetica_review = _load_aesthetica_review(product_id)
         url_check = check_gumroad_url(product)
         generation_steps = ("outline", "product_content", "listing_copy", "qa_review", "distribution_post")
         generation_status = {
@@ -278,6 +282,7 @@ def edit_product(
                 "recent_llm_calls": recent_llm_calls,
                 "flash_banner": flash_banner,
                 "readiness_report": readiness_report,
+                "aesthetica_review": aesthetica_review,
             },
         )
 
@@ -1276,6 +1281,28 @@ def quality_check_product(product_id: int):
         "success",
         "quality",
         msg=f"✓ Readiness check complete: {report['readiness_status']} ({report['readiness_score']}/100)",
+    )
+
+
+@app.post("/products/{product_id}/aesthetica-review")
+def aesthetica_review_product(product_id: int):
+    """Run deterministic AESTHETICA review over marketplace visual variants."""
+    with session_scope() as session:
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+    report = run_aesthetica_review(product_id, PRODUCT_ROOT)
+    best = report.get("best_gumroad_theme") or {}
+    theme = best.get("theme_name", "no theme")
+    return _generation_redirect(
+        product_id,
+        "success",
+        "aesthetica",
+        msg=(
+            "✓ AESTHETICA review complete: "
+            f"{report['overall_score']}/100; Gumroad pick: {theme}"
+        ),
     )
 
 
@@ -2398,6 +2425,17 @@ def build_readiness_report(product: dict) -> dict:
 
 def _load_readiness_report(product_id: int) -> dict | None:
     path = PRODUCT_ROOT / f"product_{product_id}" / "quality" / "readiness_report.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _load_aesthetica_review(product_id: int) -> dict | None:
+    path = PRODUCT_ROOT / f"product_{product_id}" / "quality" / "aesthetica_review.json"
     if not path.exists():
         return None
     try:

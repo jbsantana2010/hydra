@@ -1213,3 +1213,130 @@ loop with patterns grounded in observed buyer behavior, not forum discussion.
 - `products/product_43/sales/` — 5 files (NEW)
 - `products/product_43/quality/professional_kit_review.md` (NEW)
 - `runbooks/ROADMAP.md` (this entry)
+
+## Sprint 2.6 — AESTHETICA Designer Agent + Hermes Foundation
+
+### Objective
+
+Create HYDRA's first specialized internal agent standard without adding an
+external runtime: AESTHETICA, a deterministic visual/commercial design critic
+for marketplace assets.
+
+### Scope
+
+- Add `agents/` standards and registry.
+- Add deterministic marketplace visual scoring in `app/aesthetica.py`.
+- Review Product 43 palette variants.
+- Recommend best Gumroad and Fiverr themes.
+- Write human-readable and Hermes-ready JSON outputs.
+- Add a product edit UI action to run the review.
+
+### Out of Scope
+
+- Hermes runtime integration
+- autonomous execution
+- image generation APIs
+- scraping/browser automation
+- marketplace APIs or publishing
+- schedulers/workers
+
+### Acceptance Criteria
+
+- AESTHETICA can critique Product 43 visuals.
+- It recommends a best variant.
+- It identifies spacing/hierarchy issues.
+- It writes `products/product_<id>/agent_reviews/aesthetica/latest.json`.
+- Product edit UI can trigger the review.
+- Sprint 2.5 visual generation verification still passes.
+
+### Next Launch Milestone
+
+Use AESTHETICA's recommended theme, export marketplace-ready PNG/JPG assets
+manually, and create the first real Gumroad/Fiverr listing test.
+
+---
+
+## Sprint 2.7 — LAUNCH: Export + Webhook + ATLAS
+
+**Completed:** 2026-05-11
+**Status:** DONE — ready to list
+
+### Objective
+
+Stop building infrastructure without market data. Get Product 43 in front of
+buyers. Minimum engineering, maximum launch readiness.
+
+### Deliverables Completed
+
+**Export**
+- SVG → PNG: `scripts/svg_to_png.py` (cairosvg in container, 1200px wide)
+- ZIP rebuilt: `scripts/rebuild_zip.py` — `Real_Estate_AI_Mastery_Kit.zip` (705KB, 19 files + START_HERE.txt)
+
+**Launch Package**
+- `products/product_43/launch/LAUNCH_CHECKLIST.md` — 6-step operator checklist
+- `products/product_43/launch/gumroad/listing_copy.txt` — paste-ready Gumroad setup ($97)
+- `products/product_43/launch/fiverr/gig_copy.txt` — Fiverr gig copy + 3 packages ($47 intro)
+
+**Revenue Telemetry (ATLAS v0.1)**
+- `app/atlas.py` — thin DB wrapper (get/set state, record URLs, revenue summary, launch summary)
+- `app/webhooks.py` — Gumroad + Fiverr webhook receivers
+  - Gumroad: parses form-encoded POST, hashes email, converts cents→USD, logs Sale row
+  - Fiverr: manual order logging endpoint
+  - Both: update ProductLifecycle (first_sale_at, sale_count, total_revenue_usd, state→live)
+  - Auth bypass: `/webhooks/*` exempt from Basic Auth middleware
+- `app/alembic/versions/0004_sprint27_launch.py` — `product_lifecycle` + `sales` tables
+  - Product 43 seeded: state=approved, name='Real Estate AI Mastery Kit'
+- `app/db.py` — ProductLifecycle + Sale models added (enums aligned to migration)
+
+**Strategy**
+- `runbooks/HYDRA_ARCHITECTURAL_REVIEW_2026.md` — full system diagnosis
+- `runbooks/sprint_2.7_brief.md` — sprint rationale + honest product assessment
+
+**Verification**
+- `scripts/verify_sprint27.sh` — 10-point acceptance test
+
+### Key Technical Decisions
+
+- **Fiverr before Gumroad**: Fiverr has organic discovery; Gumroad is push marketing.
+  Launch at $47 on Fiverr for reviews, $97 on Gumroad.
+- **ATLAS is NOT an agent**: just a DB wrapper. The product_lifecycle table IS the state machine.
+- **Webhook auth exemption**: `/webhooks/*` bypasses Basic Auth so Gumroad can POST without credentials.
+- **Enum fix**: Migration created `lifecycle_state` + `sale_platform` PG enum types;
+  SQLAlchemy models updated to use `sa.Enum(..., create_type=False)` to match.
+
+### Bug Fixed
+
+- `db.py` Sale.platform and ProductLifecycle.state were declared as `String(32)` but
+  migration created them as PostgreSQL ENUM types → `DatatypeMismatch` on INSERT.
+  Fixed by aligning models to use `sa.Enum` with `create_type=False`.
+
+### Operator TODO (not engineering)
+
+1. Open Doc 02 (AI Tools Guide) + Doc 03 (Prompt Templates) PDFs — spot-check quality
+2. Create Gumroad listing at $97 using `launch/gumroad/listing_copy.txt`
+3. Create PLR upsell at $197
+4. Fill in `GUMROAD_PRODUCT_MAP` in `app/webhooks.py` with real Gumroad product_id
+5. Create Fiverr gig at $47 using `launch/fiverr/gig_copy.txt`
+6. Post in 3 communities (r/realestateinvesting, BiggerPockets, Facebook Group)
+
+### Files Changed
+
+- `app/atlas.py` (NEW)
+- `app/webhooks.py` (NEW)
+- `app/main.py` (webhook router added + auth bypass)
+- `app/db.py` (ProductLifecycle + Sale models; enum types fixed)
+- `app/alembic/versions/0004_sprint27_launch.py` (NEW)
+- `scripts/svg_to_png.py` (NEW)
+- `scripts/rebuild_zip.py` (NEW)
+- `scripts/verify_sprint27.sh` (NEW)
+- `products/product_43/launch/` (NEW — 3 files)
+- `runbooks/HYDRA_ARCHITECTURAL_REVIEW_2026.md` (NEW)
+- `runbooks/sprint_2.7_brief.md` (NEW)
+- `runbooks/ROADMAP.md` (this entry)
+
+### Next Sprint
+
+Sprint 2.8: First sale analysis.
+- After ≥1 Gumroad sale: check `ProductLifecycle.state` (should be 'live')
+- If zero sales after 2 weeks: pivot to Fiverr-first, lower price to $27, post content
+- Sprint 2.8 scope determined by market response, not engineering preferences
