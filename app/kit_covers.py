@@ -150,6 +150,7 @@ MARKETPLACE_FILES = {
     "payhip_sellfy": "payhip_sellfy_cover.svg",
 }
 MARKETPLACE_KIND_BY_FILE = {filename: kind for kind, filename in MARKETPLACE_FILES.items()}
+BUYER_OUTCOME_COPY = "Save hours on listings, follow-up, and reviews."
 
 
 @dataclass(frozen=True)
@@ -234,6 +235,40 @@ def _text_lines(lines: list[str], x: int, y: int, size: int, weight: int, fill: 
         f'font-size="{size}" font-weight="{weight}" fill="{fill}" text-anchor="{anchor}">{_esc(line)}</text>'
         for i, line in enumerate(lines)
     )
+
+
+def _estimated_text_width(text: str, font_size: int, weight: int = 500, letter_spacing: float = 0) -> float:
+    multiplier = 0.56
+    if weight >= 800 or str(text).upper() == str(text):
+        multiplier = 0.62
+    if weight >= 900:
+        multiplier = 0.66
+    return len(str(text)) * font_size * multiplier + max(0, len(str(text)) - 1) * letter_spacing
+
+
+def _text_width_checks(
+    label: str,
+    lines: list[str],
+    container: Rect,
+    font_size: int,
+    weight: int,
+    padding: int = 0,
+    letter_spacing: float = 0,
+) -> list[dict]:
+    max_width = container.width - padding * 2
+    checks = []
+    for line in lines:
+        estimated = round(_estimated_text_width(line, font_size, weight, letter_spacing), 1)
+        checks.append(
+            {
+                "label": label,
+                "text": line,
+                "estimated_width": estimated,
+                "container_width": max_width,
+                "status": "PASS" if estimated <= max_width else "FAIL",
+            }
+        )
+    return checks
 
 
 def _premium_background(width: int, height: int, c: dict) -> str:
@@ -372,12 +407,13 @@ def generate_master_cover_svg(
 def _marketplace_layout(width: int, height: int) -> dict[str, int]:
     scale = width / 1280
     safe_margin = int(76 * scale)
-    left_column_width = int(560 * scale)
-    right_visual_x = int(720 * scale)
-    card_width = int(220 * scale)
-    card_height = int(82 * scale)
-    gutter_x = int(30 * scale)
-    gutter_y = int(16 * scale)
+    left_column_width = int(500 * scale)
+    card_width = int(190 * scale)
+    card_height = int(78 * scale)
+    gutter_x = int(24 * scale)
+    gutter_y = int(18 * scale)
+    card_cluster_width = card_width * 2 + gutter_x
+    right_visual_x = width - safe_margin - card_cluster_width
     return {
         "canvas_width": width,
         "canvas_height": height,
@@ -394,7 +430,7 @@ def _marketplace_layout(width: int, height: int) -> dict[str, int]:
         "card_height": card_height,
         "gutter_x": gutter_x,
         "gutter_y": gutter_y,
-        "title_y": int(214 * scale) if width == 1280 else int(242 * scale),
+        "title_y": int(210 * scale) if width == 1280 else int(236 * scale),
         "subtitle_y": 0,
         "bottom_panel_y": height - safe_margin - int(112 * scale),
         "safe_bottom_y": height - safe_margin - int(112 * scale),
@@ -425,10 +461,10 @@ def _cards_grid(layout: dict[str, int], c: dict) -> str:
 def _marketplace_layout_zones(kind: str, width: int, height: int, title_lines: list[str], sub_lines: list[str]) -> tuple[dict[str, int], dict[str, Rect], list[Rect]]:
     layout = _marketplace_layout(width, height)
     scale = layout["scale"]
-    title_size = 54 if width == 1280 else 64
-    title_gap = 60 if width == 1280 else 72
-    sub_size = 21 if width == 1280 else 26
-    sub_gap = 29 if width == 1280 else 34
+    title_size = 50 if width == 1280 else 60
+    title_gap = 56 if width == 1280 else 68
+    sub_size = 19 if width == 1280 else 24
+    sub_gap = 27 if width == 1280 else 32
     title_y = layout["title_y"]
     title_height = max(title_size, len(title_lines) * title_gap)
     subtitle_y = title_y + title_height + layout["text_block_gap"] + int(12 * scale)
@@ -463,7 +499,7 @@ def _marketplace_layout_zones(kind: str, width: int, height: int, title_lines: l
         "visual_zone",
     )
 
-    bottom_panel = Rect("buyer_outcome_panel", title.x, layout["bottom_panel_y"], layout["left_column_width"], int(86 * scale), "bottom_panel")
+    bottom_panel = Rect("buyer_outcome_panel", title.x, layout["bottom_panel_y"], layout["left_column_width"], int(90 * scale), "bottom_panel")
     bottom_chip = Rect("hydra_footer_chip", width - layout["margin"] - int(224 * scale), layout["bottom_chip_y"], int(224 * scale), int(36 * scale), "footer_chip")
 
     zones = {
@@ -490,13 +526,15 @@ def _marketplace_layout_zones(kind: str, width: int, height: int, title_lines: l
     return layout, zones, elements
 
 
-def validate_marketplace_layout(kind: str, width: int, height: int, elements: list[Rect]) -> dict:
+def validate_marketplace_layout(kind: str, width: int, height: int, elements: list[Rect], text_checks: list[dict] | None = None) -> dict:
     issues = {
         "collisions": [],
         "bounds_issues": [],
         "safe_zone_issues": [],
         "spacing_issues": [],
+        "text_overflow_issues": [],
     }
+    text_checks = text_checks or []
     by_name = {item.name: item for item in elements}
     major_zone_gap = 40
     text_block_gap = 32
@@ -532,10 +570,17 @@ def validate_marketplace_layout(kind: str, width: int, height: int, elements: li
     card_cluster = by_name["module_card_cluster"]
     if card_cluster.x < title.right + major_zone_gap:
         issues["safe_zone_issues"].append("module cards enter title safe zone")
+    if _gap_between(title, card_cluster) < major_zone_gap:
+        issues["safe_zone_issues"].append("module grid too close to headline safe zone")
     if kind == "fiverr_gig_image" and (width, height) != (1280, 769):
         issues["safe_zone_issues"].append("Fiverr image must be 1280x769")
     if kind in ("gumroad_cover", "payhip_sellfy") and (width, height) != (1600, 900):
         issues["safe_zone_issues"].append("Gumroad/Payhip cover must be 1600x900")
+    for check in text_checks:
+        if check["status"] != "PASS":
+            issues["text_overflow_issues"].append(
+                f"{check['label']} text overflow: estimated {check['estimated_width']}px > {check['container_width']}px"
+            )
 
     fail_count = sum(len(value) for value in issues.values())
     return {
@@ -546,6 +591,8 @@ def validate_marketplace_layout(kind: str, width: int, height: int, elements: li
         "bounds_issues": issues["bounds_issues"],
         "safe_zone_issues": issues["safe_zone_issues"],
         "spacing_issues": issues["spacing_issues"],
+        "text_overflow_issues": issues["text_overflow_issues"],
+        "text_checks": text_checks,
         "elements": [item.as_dict() for item in elements],
     }
 
@@ -553,13 +600,48 @@ def validate_marketplace_layout(kind: str, width: int, height: int, elements: li
 def layout_safety_for_asset(kind: str, theme: str = "navy_gold") -> dict:
     width, height = (1600, 900) if kind in ("gumroad_cover", "payhip_sellfy") else (1280, 769)
     headline, subheadline = HEADLINE_VARIANTS.get(kind, HEADLINE_VARIANTS["gumroad_cover"])
-    title_lines = _wrap_text_svg(headline, 25)
+    title_lines = _wrap_text_svg(headline, 15)
     sub_lines = _wrap_text_svg(subheadline, 38 if width == 1280 else 44)
-    _layout, _zones, elements = _marketplace_layout_zones(kind, width, height, title_lines, sub_lines)
-    result = validate_marketplace_layout(kind, width, height, elements)
+    layout, zones, elements = _marketplace_layout_zones(kind, width, height, title_lines, sub_lines)
+    text_checks = _marketplace_text_checks(layout, zones, title_lines, sub_lines)
+    result = validate_marketplace_layout(kind, width, height, elements, text_checks)
     result["theme"] = theme
     result["recommended_fixes"] = _layout_fix_recommendations(result)
     return result
+
+
+def _marketplace_text_checks(layout: dict[str, int], zones: dict[str, Rect], title_lines: list[str], sub_lines: list[str]) -> list[dict]:
+    scale = layout["scale"]
+    checks = []
+    checks.extend(
+        _text_width_checks(
+            "title",
+            title_lines,
+            zones["title"],
+            layout["title_size"],
+            920,
+        )
+    )
+    checks.extend(
+        _text_width_checks(
+            "subtitle",
+            sub_lines,
+            zones["subtitle"],
+            layout["subtitle_size"],
+            600,
+        )
+    )
+    checks.extend(
+        _text_width_checks(
+            "buyer_outcome",
+            [BUYER_OUTCOME_COPY],
+            zones["bottom_panel"],
+            int(15 * scale),
+            780,
+            padding=int(28 * scale),
+        )
+    )
+    return checks
 
 
 def _layout_fix_recommendations(result: dict) -> list[str]:
@@ -572,6 +654,8 @@ def _layout_fix_recommendations(result: dict) -> list[str]:
         fixes.append("Separate text zones from visual modules and enforce platform dimensions.")
     if result["spacing_issues"]:
         fixes.append("Increase card gutters and reduce card density.")
+    if result.get("text_overflow_issues"):
+        fixes.append("Shorten or wrap text so it stays inside its containing panel.")
     if not fixes:
         fixes.append("No deterministic layout fixes required.")
     return fixes
@@ -614,6 +698,7 @@ def build_layout_safety_report(product_dir: str | Path) -> dict:
         "requirements": {
             "minimum_primary_text_gap_px": 32,
             "minimum_major_zone_gap_px": 40,
+            "text_width_estimation": "bold text estimated wider and must fit inside declared containers",
             "fiverr_dimensions": "1280x769",
             "gumroad_dimensions": "1600x900",
         },
@@ -660,6 +745,8 @@ def _layout_safety_markdown(report: dict) -> str:
             lines.append(f"- Safe zones: {'; '.join(asset['safe_zone_issues'])}")
         if asset["spacing_issues"]:
             lines.append(f"- Spacing: {'; '.join(asset['spacing_issues'])}")
+        if asset.get("text_overflow_issues"):
+            lines.append(f"- Text overflow: {'; '.join(asset['text_overflow_issues'])}")
         lines.append(f"- Recommended fixes: {'; '.join(asset['recommended_fixes'])}")
         lines.append("")
     return "\n".join(lines)
@@ -677,10 +764,11 @@ def generate_marketplace_cover_svg(kind: str, kit_name: str, kit_tagline: str, t
         "mockup": "PRODUCT MOCKUP",
         "payhip_sellfy": "PAYHIP / SELLFY COVER",
     }.get(kind, "MARKETPLACE COVER")
-    title_lines = _wrap_text_svg(headline, 25)
+    title_lines = _wrap_text_svg(headline, 15)
     sub_lines = _wrap_text_svg(subheadline, 38 if width == 1280 else 44)
     layout, zones, elements = _marketplace_layout_zones(kind, width, height, title_lines, sub_lines)
-    validation = validate_marketplace_layout(kind, width, height, elements)
+    text_checks = _marketplace_text_checks(layout, zones, title_lines, sub_lines)
+    validation = validate_marketplace_layout(kind, width, height, elements, text_checks)
     status = validation["status"]
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
@@ -701,7 +789,7 @@ def generate_marketplace_cover_svg(kind: str, kit_name: str, kit_tagline: str, t
   <g transform="translate({zones['bottom_panel'].x} {zones['bottom_panel'].y})">
     <rect width="{layout['title_box_width']}" height="84" rx="18" fill="{c['cream']}" opacity="0.98" filter="url(#shadow)"/>
     <text x="28" y="31" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" font-weight="900" fill="{c['primary_2']}" letter-spacing="1.4">BUYER OUTCOME</text>
-    <text x="28" y="59" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="17" font-weight="800" fill="{c['ink']}">Save time on listings, follow-up, client communication, content, and reviews.</text>
+    <text x="28" y="59" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="{int(15 * layout['scale'])}" font-weight="780" fill="{c['ink']}">{_esc(BUYER_OUTCOME_COPY)}</text>
   </g>
 
   <rect x="{zones['bottom_chip'].x}" y="{zones['bottom_chip'].y}" width="{zones['bottom_chip'].width}" height="{zones['bottom_chip'].height}" rx="18" fill="{c['panel']}" opacity="0.72"/>

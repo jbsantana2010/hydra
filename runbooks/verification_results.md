@@ -253,3 +253,15 @@ _Run `./scripts/verify_sprint15.sh` and replace PENDING with PASS/FAIL._
 | `bash scripts/verify_sprint25.sh` | PASS — 70/70 |
 | Product 43 layout safety | PASS — 31 assets checked, 0 failures |
 | Navy Gold selected assets | PASS — 5 variant assets, all PASS |
+
+---
+
+## Sprint 2.8.1 — 2026-05-12
+
+| Check | Result |
+|---|---|
+| `bash scripts/verify_sprint281.sh` | PASS |
+| `bash scripts/verify_sprint28.sh` | PASS |
+| `bash scripts/verify_sprint26.sh` | PASS |
+| Text overflow checks | PASS — no buyer outcome overflow |
+| Product 43 layout consistency | PASS — Gumroad, Fiverr, and Payhip/Sellfy use the same shortened buyer outcome and layout safety standard |

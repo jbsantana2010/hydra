@@ -270,6 +270,18 @@ LIVE=1 bash scripts/verify_sprint26.sh
 bash scripts/verify_sprint25.sh
 ```
 
+## Sprint 2.8.1
+
+```bash
+cd /home/jb/dev/hydra
+python3 -m py_compile app/kit_covers.py app/aesthetica.py
+python3 scripts/build_product43_kit.py --covers-only
+chmod +x scripts/verify_sprint281.sh
+bash scripts/verify_sprint281.sh
+bash scripts/verify_sprint28.sh
+bash scripts/verify_sprint26.sh
+```
+
 ## Sprint 2.8
 
 ```bash

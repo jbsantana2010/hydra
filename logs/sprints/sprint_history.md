@@ -98,6 +98,19 @@ Entry format:
   - regenerated `products/product_43/marketplace_visuals/`
 - Verification: see `runbooks/verification_results.md`.
 
+---
+
+## 2026-05-12T00:00:00Z - Sprint 2.8.1 Marketplace Visual Consistency Fix
+
+- Summary: Aligned all Product 43 marketplace visuals to the Payhip/Sellfy spacing standard and added text overflow validation.
+- Scope: deterministic SVG layout correctness only; no image generation, publishing automation, scraping, or Hermes runtime.
+- Outputs:
+  - regenerated `products/product_43/marketplace_visuals/`
+  - updated `products/product_43/quality/layout_safety_report.json`
+  - updated `products/product_43/quality/visual_commercial_review.md`
+  - updated AESTHETICA latest review
+- Verification: see `runbooks/verification_results.md`.
+
 ## 2026-05-10 - Sprint 2.2 Integration
 
 - Executor: Codex
